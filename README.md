@@ -19,7 +19,7 @@ These skills follow the universal **SKILL.md** format and work with any AI codin
 
 1. **Clone the repository** to your agent's skill directory:
    ```bash
-   git clone https://github.com/ikatkov/agent-skills.git .agent/skills
+   git clone https://forgejo.home.katkovonline.com/ikatkov/agent-skills.git .agent/skills
    ```
 
 2. **Invoke a skill** by name in your chat or CLI:
