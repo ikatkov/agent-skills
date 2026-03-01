@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video Feed OCR"
+  short_description: "Extract text from video frames using OCR."
+  default_prompt: "Use this skill to run OCR over video frames and return structured text output."
