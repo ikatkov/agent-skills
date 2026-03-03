@@ -1,0 +1,4 @@
+interface:
+  display_name: "Instagram Gallery Download"
+  short_description: "Download Instagram posts and carousels with gallery-dl"
+  default_prompt: "Download media from an Instagram URL using gallery-dl with sensible defaults and organize output."
