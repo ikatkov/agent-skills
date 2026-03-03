@@ -5,15 +5,11 @@ Properties use YAML frontmatter at the start of a note:
 ```yaml
 ---
 title: My Note Title
-date: 2024-01-15
+date created: March 2nd 2026, 11:51:07 am
+date modified: March 2nd 2026, 11:53:08 am
 tags:
-  - project
+  - project/selfhosted
   - important
-aliases:
-  - My Note
-  - Alternative Name
-cssclasses:
-  - custom-class
 status: in-progress
 rating: 4.5
 completed: false
@@ -36,8 +32,8 @@ due: 2024-02-01T14:30:00
 ## Default Properties
 
 - `tags` - Note tags (searchable, shown in graph view)
-- `aliases` - Alternative names for the note (used in link suggestions)
-- `cssclasses` - CSS classes applied to the note in reading/editing view
+- `date created:` - Date of creation
+- `date modified:` - Date of last modification
 
 ## Tags
 
