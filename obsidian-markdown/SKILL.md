@@ -9,7 +9,7 @@ Create and edit valid Obsidian Flavored Markdown. Obsidian extends CommonMark an
 
 ## Workflow: Creating an Obsidian Note
 
-1. **Add frontmatter** with properties (title, tags, aliases) at the top of the file. See [PROPERTIES.md](references/PROPERTIES.md) for all property types.
+1. **Add frontmatter** with properties (title, tags) at the top of the file. See [PROPERTIES.md](references/PROPERTIES.md) for all property types.
 2. **Write content** using standard Markdown for structure, plus Obsidian-specific syntax below.
 3. **Link related notes** using wikilinks (`[[Note]]`) for internal vault connections, or standard Markdown links for external URLs.
 4. **Embed content** from other notes, images, or PDFs using the `![[embed]]` syntax. See [EMBEDS.md](references/EMBEDS.md) for all embed types.
@@ -78,18 +78,15 @@ See [CALLOUTS.md](references/CALLOUTS.md) for the full list with aliases, nestin
 ```yaml
 ---
 title: My Note
-date: 2024-01-15
+date created: March 2nd 2026, 11:51:07 am
+date modified: March 2nd 2026, 11:53:08 am
 tags:
   - project
   - active
-aliases:
-  - Alternative Name
-cssclasses:
-  - custom-class
 ---
 ```
 
-Default properties: `tags` (searchable labels), `aliases` (alternative note names for link suggestions), `cssclasses` (CSS classes for styling).
+Default properties: `tags` (searchable labels), `date created`, `date modified`
 
 See [PROPERTIES.md](references/PROPERTIES.md) for all property types, tag syntax rules, and advanced usage.
 
@@ -157,7 +154,8 @@ Inline footnote.^[This is inline.]
 ````markdown
 ---
 title: Project Alpha
-date: 2024-01-15
+date created: March 2nd 2026, 11:51:07 am
+date modified: March 2nd 2026, 11:53:08 am
 tags:
   - project
   - active
