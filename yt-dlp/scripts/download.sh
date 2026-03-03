@@ -66,6 +66,13 @@ if [[ -z "$URL" ]]; then
     exit 1
 fi
 
+# Route Instagram post/gallery URLs to dedicated skill
+if [[ "$URL" =~ ^https?://(www\.)?instagram\.com/p/[^/?#]+/?(\?.*)?$ ]]; then
+    echo "Error: Instagram /p/ URLs are handled by the 'instagram-gallery-download' skill."
+    echo "Use: /Users/ikatkov/.codex/skills/instagram-gallery-download/scripts/download_instagram_gallery.sh \"$URL\""
+    exit 1
+fi
+
 # Check dependencies
 if ! command -v yt-dlp &> /dev/null; then
     echo "Error: yt-dlp is not installed"
