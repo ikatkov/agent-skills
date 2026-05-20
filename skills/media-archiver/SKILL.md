@@ -1,5 +1,5 @@
 ---
-name: media_archiver
+name: media-archiver
 description: Converts a web page into an offline-ready video gallery, downloading assets and linking local media.
 ---
 
