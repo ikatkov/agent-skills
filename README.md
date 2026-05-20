@@ -30,6 +30,12 @@ Install globally for Codex:
 npx skills add ikatkov/agent-skills -g -a codex
 ```
 
+Install all skills to all detected agents without prompts:
+
+```bash
+npx skills add ikatkov/agent-skills --all
+```
+
 ## Skills
 
 | Skill | Use |
@@ -57,3 +63,46 @@ skills/
 ```
 
 Each `SKILL.md` has YAML frontmatter with `name` and `description`, followed by the instructions an agent should load when the skill is activated.
+
+## Creating Skills
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+description: What this skill does and when to use it.
+---
+
+# My Skill
+
+Instructions for the agent to follow when this skill is activated.
+```
+
+Rules:
+
+- Use lowercase, hyphenated names.
+- Keep the directory name and frontmatter `name` the same.
+- Keep skill-specific helper files inside that skill directory.
+- Put larger reference material in `references/` and link to it from `SKILL.md`.
+- Do not add a root-level `SKILL.md`; `skills/` is the canonical discovery path for this repository.
+
+## Validation
+
+Check that the CLI can discover every skill:
+
+```bash
+npx --yes skills add . --list
+```
+
+Check the published GitHub shorthand after pushing:
+
+```bash
+npx --yes skills add ikatkov/agent-skills --list
+```
+
+## Related Links
+
+- [skills CLI](https://github.com/vercel-labs/skills)
+- [skills.sh directory](https://skills.sh)
+- [Agent Skills specification](https://agentskills.io)
