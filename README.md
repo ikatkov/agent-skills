@@ -41,7 +41,9 @@ npx skills add ikatkov/agent-skills --all
 | Skill | Use |
 | --- | --- |
 | `conventional-commits` | Write conventional commit messages and changelog-friendly commit history. |
+| `grill-me` | Stress-test a plan or design by asking one focused question at a time. |
 | `instagram-gallery-download` | Download Instagram post/carousel media with `gallery-dl`. |
+| `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |
 | `local-visual-reasoning-scorer` | Run local OCR, image comparison, and visual reasoning workflows. |
 | `media-archiver` | Convert a web page into an offline-ready local video gallery. |
 | `obsidian-markdown` | Create and edit Obsidian Flavored Markdown. |
