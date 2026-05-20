@@ -1,6 +1,6 @@
 # Agent Skills
 
-[![skills.sh](https://skills.sh/b/ikatkov/agent-skills)](https://skills.sh/ikatkov/agent-skills)
+[![skills.sh](https://www.skills.sh/b/ikatkov/agent-skills)](https://www.skills.sh/ikatkov/agent-skills)
 
 Personal AI agent skills packaged for the open `SKILL.md` format and installable with the `skills` CLI.
 
