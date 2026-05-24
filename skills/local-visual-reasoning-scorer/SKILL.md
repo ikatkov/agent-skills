@@ -1,13 +1,13 @@
 ---
 name: local-visual-reasoning-scorer
-description: Run local multimodal visual reasoning, OCR and image scoring with local LLM models. Use for image to text (OCR), ranking image candidates, selecting best frames/crops, detecting blurry or cut-off diagrams, and local-only visual QA workflows.
+description: Run local multimodal visual reasoning, OCR and image scoring with local LLM models. Use only on macOS hosts where a local OpenAI-compatible visual LLM endpoint is already running and reachable. Use for image to text (OCR), ranking image candidates, selecting best frames/crops, detecting blurry or cut-off diagrams, and local-only visual QA workflows. Do not use on non-macOS systems or when the local visual LLM endpoint is unavailable.
 ---
 
 # Local OCR and Visual Reasoning Scorer
 
 ## Overview
 
-Use this skill for local OCR, image comparison, and image scoring tasks through local VLM models.
+Use this skill for local OCR, image comparison, and image scoring tasks through local VLM models on macOS systems with a running local visual LLM endpoint.
 
 Primary use cases:
 
@@ -25,7 +25,16 @@ Compatibility alias: `scripts/qwen_crop_rank.py` points to the same implementati
 
 ## Execution Context
 
-Always run this skill in escalation permission mode.
+Before using this skill, verify the host is macOS and the configured local visual LLM endpoint is reachable:
+
+```bash
+test "$(uname -s)" = "Darwin"
+curl -fsS http://192.168.1.161:1234/v1/models
+```
+
+If either check fails, do not use this skill. Tell the user that local visual reasoning requires macOS and a running local OpenAI-compatible visual LLM endpoint.
+
+Run the scripts in an environment that can reach the local LLM endpoint. Restricted agent sandboxes may block local network access even when the endpoint works in a normal terminal session.
 
 ## Modes
 
@@ -122,4 +131,4 @@ python3 scripts/local_visual_llm.py crop-rank \
 - Ranking modes overlay stable IDs (`C01`, `C02`, ...) on each candidate to reduce multimodal image shuffle errors.
 - Ranking modes expect model JSON and perform robust JSON extraction from textual output.
 - OCR mode returns text directly and does not require ImageMagick overlays.
-- If execution environment blocks local LAN access, rerun with appropriate permissions.
+- If the execution environment blocks local LAN access, rerun in an environment with access to the local visual LLM endpoint.

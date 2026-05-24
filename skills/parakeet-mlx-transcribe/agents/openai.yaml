@@ -1,4 +1,4 @@
 interface:
   display_name: "Parakeet MLX Transcribe"
-  short_description: "Transcribe audio/video files with parakeet-mlx CLI"
+  short_description: "Transcribe audio/video files with parakeet-mlx on macOS"
   default_prompt: "Transcribe this media file and produce text or subtitles with timestamps."

@@ -1,24 +1,34 @@
 ---
 name: parakeet-mlx-transcribe
-description: Transcribe local audio and video media into text/subtitles using the parakeet-mlx CLI. Use when requests mention transcription, subtitles, captions, timestamps, SRT/VTT/JSON output, or converting spoken content from files such as mp3, wav, m4a, mp4, mov, or mkv.
+description: Transcribe local audio and video media into text/subtitles using the parakeet-mlx CLI. Use only on macOS hosts where parakeet-mlx is installed and available on PATH. Use when requests mention transcription, subtitles, captions, timestamps, SRT/VTT/JSON output, or converting spoken content from files such as mp3, wav, m4a, mp4, mov, or mkv. Do not use on non-macOS systems or when parakeet-mlx is unavailable.
 ---
 
 # Parakeet MLX Transcribe
 
 ## Overview
 
-Use `parakeet-mlx` to transcribe media files and generate `txt`, `srt`, `vtt`, or `json` outputs. For video inputs, extract audio with `ffmpeg` first, then transcribe the extracted audio.
+Use `parakeet-mlx` to transcribe media files and generate `txt`, `srt`, `vtt`, or `json` outputs on macOS systems with `parakeet-mlx` installed. For video inputs, extract audio with `ffmpeg` first, then transcribe the extracted audio.
 
 ## Execution Context
 
-Always run `parakeet-mlx` commands outside the Codex sandbox (with escalated permissions). In the sandboxed Codex runtime, MLX/Metal device initialization can fail even when the same command works in a normal terminal session.
+Before using this skill, verify the host is macOS and the CLI is installed:
+
+```bash
+test "$(uname -s)" = "Darwin"
+command -v parakeet-mlx
+```
+
+If either check fails, do not use this skill. Tell the user that `parakeet-mlx` transcription requires macOS with `parakeet-mlx` installed.
+
+Run `parakeet-mlx` in an environment with access to MLX/Metal. Restricted agent sandboxes may block device initialization even when the same command works in a normal terminal session.
 
 ## Workflow
 
 1. Confirm input files exist and are readable.
-2. If the input is video, extract audio first with `ffmpeg`.
-3. Run `parakeet-mlx` outside sandbox with escalated permissions, using explicit output format and output directory.
-4. Return output file paths and summarize what was generated.
+2. Confirm the host is macOS and `parakeet-mlx` is installed.
+3. If the input is video, extract audio first with `ffmpeg`.
+4. Run `parakeet-mlx` with explicit output format and output directory.
+5. Return output file paths and summarize what was generated.
 
 ## Quick Start
 
@@ -97,7 +107,7 @@ Use env vars for persistent defaults:
 
 ## Troubleshooting
 
-- If `parakeet-mlx --help` crashes with MLX/Metal initialization errors, rerun outside sandbox first. If it still fails, run in a local macOS session with active GPU access.
+- If `parakeet-mlx --help` crashes with MLX/Metal initialization errors, rerun in a normal macOS terminal session with active GPU access.
 - If transcription fails for video files, check `ffmpeg` availability and confirm audio extraction succeeded.
 - If model download fails, set `--cache-dir` or `PARAKEET_CACHE_DIR` to a writable path.
 

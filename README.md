@@ -46,10 +46,10 @@ npx skills add ikatkov/agent-skills --all
 | `grill-me` | Stress-test a plan or design by asking one focused question at a time. |
 | `instagram-gallery-download` | Download Instagram post/carousel media with `gallery-dl`. |
 | `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |
-| `local-visual-reasoning-scorer` | Run local OCR, image comparison, and visual reasoning workflows. |
+| `local-visual-reasoning-scorer` | Run local OCR and visual reasoning on macOS with a running local VLM endpoint. |
 | `media-archiver` | Convert a web page into an offline-ready local video gallery. |
 | `obsidian-markdown` | Create and edit Obsidian Flavored Markdown. |
-| `parakeet-mlx-transcribe` | Transcribe audio/video locally with `parakeet-mlx`. |
+| `parakeet-mlx-transcribe` | Transcribe audio/video on macOS with `parakeet-mlx`. |
 | `video-feed-ocr` | Extract visible text from sampled video frames. |
 | `yt-dlp` | Download videos or extract audio/subtitles with `yt-dlp`. |
 
