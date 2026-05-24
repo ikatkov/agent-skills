@@ -40,7 +40,9 @@ npx skills add ikatkov/agent-skills --all
 
 | Skill | Use |
 | --- | --- |
+| `agent-browser` | Automate websites with the `agent-browser` CLI. |
 | `conventional-commits` | Write conventional commit messages and changelog-friendly commit history. |
+| `generate-map` | Turn place-heavy text into a GeoJSON map link. |
 | `grill-me` | Stress-test a plan or design by asking one focused question at a time. |
 | `instagram-gallery-download` | Download Instagram post/carousel media with `gallery-dl`. |
 | `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |

@@ -1,0 +1,67 @@
+{
+  "skill_name": "generate-map",
+  "evals": [
+    {
+      "id": 0,
+      "name": "oakland-day-trip-prose",
+      "prompt": "I'm planning a chill Oakland day with a friend who's visiting from out of town. We'd start with coffee at Blue Bottle on Webster, then walk over to Lake Merritt for a loop around the water. After that I want to take her up to the Mormon Temple gardens for the views — Oakland Temple Hill Gardens. Lunch at Homeroom on 40th Street (the mac and cheese place), then maybe Mountain View Cemetery in the afternoon for the architecture walk. End the day at Trick Dog... wait that's SF. Let's end at The Alley on Grand for piano sing-alongs. Can you make me a map of all this so I can text it to her?",
+      "files": [],
+      "assertions": [
+        "Output contains a URL beginning with https://geojson.io/#data=",
+        "Trick Dog is NOT included as a Feature (user explicitly removed it)",
+        "Feature count is between 5 and 7 (target: 6 — Blue Bottle, Lake Merritt, Oakland Temple Hill Gardens, Homeroom, Mountain View Cemetery, The Alley)",
+        "Every Feature has all required properties: name, description, address, hours, best_time, maps_url, directions_url, marker-color, marker-symbol",
+        "All Feature coordinates are in the Oakland area (latitude 37.7–37.9, longitude -122.35 to -122.1)",
+        "The Alley is geocoded to Oakland (not San Francisco) — Grand Ave, Oakland",
+        "No Feature has coordinates [0, 0]",
+        "Coordinates are in [longitude, latitude] order (longitude is negative, latitude is positive)"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "list-of-tokyo-recs",
+      "prompt": "friend just sent me her tokyo list, can u plot these:\n- teamLab Planets\n- Senso-ji temple in Asakusa\n- Shibuya Sky\n- Tsukiji Outer Market (for breakfast)\n- Meiji Jingu\n- Golden Gai (Shinjuku)\n- Nezu Museum",
+      "files": [],
+      "assertions": [
+        "Output contains a URL beginning with https://geojson.io/#data=",
+        "FeatureCollection has 7 Features (one per landmark)",
+        "All Feature coordinates are in Tokyo (latitude 35.5–35.85, longitude 139.5–139.95)",
+        "Senso-ji and Meiji Jingu have a religious-category marker-symbol (e.g. religious-jewish/christian/muslim, monument, or place_of_worship)",
+        "Nezu Museum has a museum or art-gallery marker-symbol",
+        "Shibuya Sky has a viewpoint marker-symbol",
+        "Tsukiji Outer Market description or best_time mentions breakfast/morning context (preserved from user's note)",
+        "Every Feature has all required properties: name, description, address, hours, best_time, maps_url, directions_url, marker-color, marker-symbol"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "ambiguous-and-failures",
+      "prompt": "Make me a map of these spots in upstate NY: Watkins Glen State Park, Letchworth, Cornell University, The Cascadilla Gorge trail, Buttermilk Falls, and that quirky little place called Wegmans Cafe (the original one). Should be a fun fall foliage trip.",
+      "files": [],
+      "assertions": [
+        "Output contains a URL beginning with https://geojson.io/#data=",
+        "Letchworth is geocoded to Letchworth State Park in NY (latitude ~42.5–42.7, longitude ~-78.05 to -77.85), not somewhere else",
+        "Watkins Glen, Cornell, Cascadilla Gorge, and Buttermilk Falls all have coordinates in upstate NY (latitude 42.0–42.8, longitude -77.5 to -76.0)",
+        "If Wegmans Cafe is not a confidently geocodable landmark, it is reported as 'couldn't locate' / failed in the response summary, NOT dropped as a Feature with [0,0] or wildly wrong coordinates",
+        "No Feature has coordinates [0, 0]",
+        "Every included Feature has all required properties: name, description, address, hours, best_time, maps_url, directions_url, marker-color, marker-symbol"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "big-sur-emoji-list",
+      "prompt": "📍Calla Lilly valley\n📍Bixby bridge\n📍Pfeiffer Big Sur State Park\n📍Cafe Kevah\n📍Henry Miller Memorial library\n📍Julia Pfeiffer Burns State Park\n📍Mcway falls\n📍Pfeiffer Beach\n📍Limekiln state park\n📍Sand Dollar Beach\n📍Ragged Point",
+      "files": [],
+      "assertions": [
+        "Output contains a URL beginning with https://geojson.io/#data=",
+        "No Feature name starts with the 📍 emoji (the marker prefix was stripped during extraction)",
+        "FeatureCollection has 9 to 11 Features (some may legitimately fail to geocode, but most should resolve)",
+        "All resolved Feature coordinates are along the Big Sur / Central California coast (latitude 35.4–36.7, longitude -122.0 to -121.3)",
+        "Bixby Bridge does NOT have fabricated business hours — its `hours` is something like 'Open 24/7', 'Daylight hours', 'Always accessible', 'N/A', or 'Hours unknown'",
+        "Natural features (beaches, falls, parks) use appropriate marker-symbols (beach, park, garden, viewpoint, mountain, triangle) — not restaurant/shop",
+        "Calla Lily Valley resolves near Big Sur / Garrapata area (not generically far away), tolerating the 'Calla Lilly' misspelling",
+        "No Feature has coordinates [0, 0]"
+      ]
+    }
+  ]
+}

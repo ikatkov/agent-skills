@@ -1,5 +1,7 @@
 # Embeds Reference
 
+All files must be placed in a folder `./attachments/{note-file-name}`
+
 ## Embed Notes
 
 ```markdown

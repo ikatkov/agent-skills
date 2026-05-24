@@ -1,6 +1,6 @@
 ---
 name: yt-dlp
-description: Download videos from YouTube, Instagram Reels, Tiktok, Twitter, and thousands of other sites using yt-dlp. Supports format selection, quality control, metadata embedding, and cookie authentication. Use when the user provides a video URL and wants to download it, extract audio (MP3), download subtitles, or select video quality. Triggers on phrases like "download video", "yt-dlp", "YouTube", "instagram reel", "instagram reels", "tiktok", "extract audio". Do not use for Instagram post/gallery URLs matching instagram.com/p/<code>/; route those to the instagram-gallery-download skill.
+description: Download videos from YouTube, Instagram Reels, Tiktok, Twitter, and thousands of other sites using yt-dlp. Supports format selection, quality control, metadata embedding, and cookie authentication. Use when the user provides a video URL and wants to download it, extract audio (MP3), download subtitles, or select video quality. Triggers on phrases like "download video", "yt-dlp", "YouTube", "instagram reel", "instagram reels", "tiktok", "extract audio". Do not use for Instagram post/gallery URLs matching instagram.com/p/{code}/; route those to the instagram-gallery-download skill.
 ---
 
 # yt-dlp Video Downloader
@@ -9,8 +9,8 @@ Download videos from thousands of websites using yt-dlp.
 
 ## Routing Rule
 
-1. If URL matches `https://www.instagram.com/p/<code>/`, route to `instagram-gallery-download` skill.
-2. If URL matches `https://www.instagram.com/reel/<code>/` or `https://www.instagram.com/reels/<code>/`, continue with this `yt-dlp` skill.
+1. If URL matches `https://www.instagram.com/p/{code}/`, route to `instagram-gallery-download` skill.
+2. If URL matches `https://www.instagram.com/reel/{code}/` or `https://www.instagram.com/reels/<code>/`, continue with this `yt-dlp` skill.
 3. For non-Instagram supported sites, continue with this `yt-dlp` skill.
 
 ## Quick Start
