@@ -46,6 +46,7 @@ npx skills add ikatkov/agent-skills --all
 | `gemini-unwatermark` | Remove visible Gemini watermarks from local image files. |
 | `generate-map` | Turn place-heavy text into a GeoJSON map link. |
 | `grill-me` | Stress-test a plan or design by asking one focused question at a time. |
+| `ian-xiaohei-illustrations` | Design weird, clean, hand-drawn Xiaohei illustrations for English articles (Codex renders directly; other agents hand off a prompt to paste into ChatGPT). |
 | `instagram-gallery-download` | Download Instagram post/carousel media with `gallery-dl`. |
 | `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |
 | `local-visual-reasoning-scorer` | Run local OCR and visual reasoning on macOS with a running local VLM endpoint. |
