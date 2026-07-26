@@ -51,8 +51,10 @@ npx skills add ikatkov/agent-skills --all
 | `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |
 | `local-visual-reasoning-scorer` | Run local OCR and visual reasoning on macOS with a running local VLM endpoint. |
 | `media-archiver` | Convert a web page into an offline-ready local video gallery. |
+| `obsidian-inbox` | Classify, reformat, and file raw notes dropped in the Obsidian inbox folder. |
 | `obsidian-markdown` | Create and edit Obsidian Flavored Markdown. |
 | `parakeet-mlx-transcribe` | Transcribe audio/video on macOS with `parakeet-mlx`. |
+| `ticket-and-pr-prose` | Write a Linear ticket or PR description that reads plain-language at the top and engineering-deep at the bottom. |
 | `video-feed-ocr` | Extract visible text from sampled video frames. |
 | `yt-dlp` | Download videos or extract audio/subtitles with `yt-dlp`. |
 
