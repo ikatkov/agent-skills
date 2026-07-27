@@ -54,6 +54,7 @@ npx skills add ikatkov/agent-skills --all
 | `obsidian-inbox` | Classify, reformat, and file raw notes dropped in the Obsidian inbox folder. |
 | `obsidian-markdown` | Create and edit Obsidian Flavored Markdown. |
 | `parakeet-mlx-transcribe` | Transcribe audio/video on macOS with `parakeet-mlx`. |
+| `review-pr` | Drive the CodeRabbit review loop on the current branch PR to a verdict, fixing only what the PR's stated scope covers. |
 | `ticket-and-pr-prose` | Write a Linear ticket or PR description that reads plain-language at the top and engineering-deep at the bottom. |
 | `video-feed-ocr` | Extract visible text from sampled video frames. |
 | `yt-dlp` | Download videos or extract audio/subtitles with `yt-dlp`. |
