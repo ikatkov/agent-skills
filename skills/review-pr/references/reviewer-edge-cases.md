@@ -19,6 +19,10 @@ review artifact.
   completion, not engagement; waiting longer cannot produce a review body it
   will never emit. Run the waiter with `--re-review-cycle` so it stops on
   `confirmed_no_new_findings` instead of grinding to `timeout`.
+- After a fix push CodeRabbit may also submit an `APPROVED` review at the new
+  HEAD with an **empty body** (alongside its thread confirmations). That is its
+  terminal verdict for the cycle — count it as the exact-HEAD response even
+  though a body-length test reads it as empty.
 - A green CodeRabbit check without a review body or inline finding is not a
   substantive review artifact.
 - Scope inline comments by their stable `original_commit_id`, not the movable
@@ -51,6 +55,15 @@ review artifact.
 - If the branch-rules endpoint fails, the waiter may derive the required-check
   names from `gh pr checks --required`. It still fails closed when neither
   source returns valid JSON.
+- One branch-rules failure is not a failure: HTTP 403 with "Upgrade to GitHub
+  Pro or make this repository public" (private repo on the free plan) means the
+  rules feature is unavailable, so rules cannot exist — read it as an empty
+  ruleset, not a failed lookup. The waiter does this itself; apply the same
+  reading in Section 5.
+- A limited token can read PRs yet 403 on `commits/*/check-runs` ("Resource not
+  accessible by personal access token"). Harmless when the ruleset requires no
+  checks — the waiter skips the rollup then — but with required checks present
+  it stays fail-closed.
 - A required context with no node in `statusCheckRollup` is pending, not
   passing — a workflow that never started looks identical to a clean rollup
   otherwise.

@@ -15,6 +15,11 @@ Wait silently for an exact-HEAD CodeRabbit review and the ruleset-required
 status checks. The script prints exactly one JSON object when it reaches a
 terminal state.
 
+Auth: uses `gh` when it works end to end. When it does not (not installed,
+unauthenticated, or broken by a command sandbox), it falls back to direct
+REST/GraphQL calls with curl, authenticated by $GH_TOKEN or $GITHUB_TOKEN —
+the same endpoints, not a degraded path. Neither transport prints the token.
+
 Options:
   --base BRANCH                 Base branch (default: main)
   --interval SECONDS            Poll interval (default: 50)
@@ -79,23 +84,85 @@ if ! [[ $PR =~ ^[0-9]+$ && $INTERVAL =~ ^[1-9][0-9]*$ && $TIMEOUT =~ ^[1-9][0-9]
   exit 2
 fi
 
-for command in gh jq mktemp; do
+for command in jq mktemp; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'required command not found: %s — stop the review, do not work around it\n' "$command" >&2
     exit 2
   fi
 done
 
-# Fail fast instead of spending the whole wait budget on calls that cannot work.
-if ! gh auth status >/dev/null 2>&1; then
-  printf 'gh is not authenticated — stop the review and run `gh auth login`\n' >&2
+# ---- transport selection -----------------------------------------------------
+#
+# gh is preferred, but it is a Go binary: inside a macOS command sandbox its
+# platform TLS verifier (Security.framework) is blocked and every call dies
+# with `x509: OSStatus …` even though curl works fine — and `gh auth status`
+# can still pass. Probing gh END TO END (a real API call) is what routes
+# around that.
+
+GH_MODE=""
+API="https://api.github.com"
+API_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+
+if command -v gh >/dev/null 2>&1 \
+  && gh auth status >/dev/null 2>&1 \
+  && gh api "repos/$OWNER/$REPO" --jq .full_name >/dev/null 2>&1; then
+  GH_MODE=gh
+elif [[ -n $API_TOKEN ]] && command -v curl >/dev/null 2>&1 \
+  && curl -fsS -H "Authorization: Bearer $API_TOKEN" -H 'Accept: application/vnd.github+json' \
+       "$API/repos/$OWNER/$REPO" >/dev/null 2>&1; then
+  GH_MODE=curl
+else
+  printf 'no working GitHub access: gh failed and no usable GH_TOKEN/GITHUB_TOKEN for curl — stop the review\n' >&2
   exit 2
 fi
 
-if ! gh api "repos/$OWNER/$REPO" --jq .full_name >/dev/null 2>&1; then
-  printf 'cannot read %s/%s with the current gh credentials — stop the review\n' "$OWNER" "$REPO" >&2
-  exit 2
-fi
+# GET one path (relative to the API root). Prints the body followed by one
+# final line holding the HTTP status code — the caller splits them. The code
+# cannot travel back through a variable: callers run this inside $(...), which
+# is a subshell, and a global set there dies with it.
+raw_get() {
+  curl -sS -w $'\n%{http_code}' \
+    -H "Authorization: Bearer $API_TOKEN" \
+    -H 'Accept: application/vnd.github+json' \
+    "$API/$1"
+}
+
+# Emit every element of a paginated array endpoint, one JSON object per line.
+api_elements() {
+  local path=$1
+  if [[ $GH_MODE == gh ]]; then
+    gh api --paginate "$path" --jq '.[]'
+    return
+  fi
+  local page=1 sep='?' resp code body n
+  [[ $path == *\?* ]] && sep='&'
+  while :; do
+    resp=$(raw_get "${path}${sep}per_page=100&page=$page") || return 1
+    code=${resp##*$'\n'}
+    body=${resp%$'\n'*}
+    [[ $code == 200 ]] || return 1
+    n=$(jq 'length' <<<"$body" 2>/dev/null) || return 1
+    jq -c '.[]' <<<"$body"
+    ((n < 100)) && break
+    ((page++))
+    ((page > 30)) && break # runaway backstop; 3000 items is beyond any real PR
+  done
+}
+
+# GET one non-paginated JSON document.
+api_object() {
+  local path=$1
+  if [[ $GH_MODE == gh ]]; then
+    gh api "$path"
+    return
+  fi
+  local resp code body
+  resp=$(raw_get "$path") || return 1
+  code=${resp##*$'\n'}
+  body=${resp%$'\n'*}
+  [[ $code == 200 ]] || return 1
+  printf '%s' "$body"
+}
 
 SHORT_SHA=${HEAD_SHA:0:9}
 REPOSITORY="$OWNER/$REPO"
@@ -159,32 +226,36 @@ fetch_snapshot() {
   local reviews="$WORK_DIR/reviews.next.jsonl"
   local comments="$WORK_DIR/comments.next.jsonl"
 
-  if ! gh api --paginate "repos/$OWNER/$REPO/issues/$PR/comments" \
-      --jq '.[] | {surface:"issue",login:.user.login,id,ts:.created_at,commit:"",path:null,line:null,url:.html_url,body}' >"$issues" 2>/dev/null; then
+  if ! api_elements "repos/$OWNER/$REPO/issues/$PR/comments" \
+      | jq -c '{surface:"issue",login:.user.login,id,ts:.created_at,commit:"",path:null,line:null,url:.html_url,body}' >"$issues" 2>/dev/null; then
     rm -f "$issues"
-    gh api graphql --paginate -f query='
-      query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
-        repository(owner:$owner,name:$repo){pullRequest(number:$pr){
-          comments(first:100,after:$endCursor){
-            nodes{id body createdAt url author{login}}
-            pageInfo{hasNextPage endCursor}
-          }
-        }}
-      }' -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" \
-      --jq '.data.repository.pullRequest.comments.nodes[] |
-        (.author.login // "") as $login |
-        {surface:"issue",
-         login:(if $login == "coderabbitai" then "coderabbitai[bot]" else $login end),
-         id,ts:.createdAt,commit:"",path:null,line:null,url,body}' >"$issues" 2>/dev/null || {
-      rm -f "$issues"
+    if [[ $GH_MODE == gh ]]; then
+      gh api graphql --paginate -f query='
+        query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+          repository(owner:$owner,name:$repo){pullRequest(number:$pr){
+            comments(first:100,after:$endCursor){
+              nodes{id body createdAt url author{login}}
+              pageInfo{hasNextPage endCursor}
+            }
+          }}
+        }' -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" \
+        --jq '.data.repository.pullRequest.comments.nodes[] |
+          (.author.login // "") as $login |
+          {surface:"issue",
+           login:(if $login == "coderabbitai" then "coderabbitai[bot]" else $login end),
+           id,ts:.createdAt,commit:"",path:null,line:null,url,body}' >"$issues" 2>/dev/null || {
+        rm -f "$issues"
+        return 1
+      }
+    else
       return 1
-    }
+    fi
   fi
 
-  if gh api --paginate "repos/$OWNER/$REPO/pulls/$PR/reviews" \
-      --jq '.[] | {surface:"review",login:.user.login,id,ts:.submitted_at,commit:.commit_id,path:null,line:null,url:.html_url,body}' >"$reviews" 2>/dev/null \
-    && gh api --paginate "repos/$OWNER/$REPO/pulls/$PR/comments" \
-      --jq '.[] | {surface:"inline",login:.user.login,id,ts:.created_at,commit:(.original_commit_id // .commit_id),path,line,url:.html_url,body}' >"$comments" 2>/dev/null \
+  if api_elements "repos/$OWNER/$REPO/pulls/$PR/reviews" 2>/dev/null \
+      | jq -c '{surface:"review",login:.user.login,id,ts:.submitted_at,commit:.commit_id,path:null,line:null,url:.html_url,body}' >"$reviews" 2>/dev/null \
+    && api_elements "repos/$OWNER/$REPO/pulls/$PR/comments" 2>/dev/null \
+      | jq -c '{surface:"inline",login:.user.login,id,ts:.created_at,commit:(.original_commit_id // .commit_id),path,line,url:.html_url,body}' >"$comments" 2>/dev/null \
     && jq -s 'sort_by(.ts // "")' "$issues" "$reviews" "$comments" >"$next"; then
     mv "$next" "$SNAPSHOT"
     return 0
@@ -205,11 +276,56 @@ fetch_json() {
   return 1
 }
 
+# Build a statusCheckRollup-shaped document from the commit's check runs and
+# legacy commit statuses. One source of truth for both transports; `gh pr view`
+# has no REST equivalent for the curl path.
+fetch_rollup() {
+  local runs statuses
+  runs=$(api_object "repos/$OWNER/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" 2>/dev/null) || return 1
+  statuses=$(api_object "repos/$OWNER/$REPO/commits/$HEAD_SHA/status" 2>/dev/null) || return 1
+  jq -n --argjson runs "$runs" --argjson statuses "$statuses" '
+    {statusCheckRollup:
+      ([$runs.check_runs[]? | {name:(.name // ""), status:(.status // ""), conclusion:(.conclusion // "")}]
+       + [$statuses.statuses[]? | {name:(.context // ""), status:"COMPLETED", conclusion:(.state // "")}])
+    }' >"$PR_STATE" 2>/dev/null || return 1
+  jq -e . "$PR_STATE" >/dev/null 2>&1
+}
+
+# True when the rules feature is unavailable on this plan (private repo without
+# Pro). Rules cannot exist there, so the correct reading is "no required
+# checks", not a fail-closed lookup failure.
+rules_feature_unavailable() {
+  grep -qiE 'upgrade to github pro|make this repository public' <<<"$1"
+}
+
 fetch_rules() {
   local required_checks="$WORK_DIR/required-checks.next.json"
   local next="$RULES.next"
+  local body
+
+  if [[ $GH_MODE == curl ]]; then
+    local resp code
+    resp=$(raw_get "repos/$OWNER/$REPO/rules/branches/$BASE_PATH") || return 1
+    code=${resp##*$'\n'}
+    body=${resp%$'\n'*}
+    if [[ $code == 200 ]] && jq -e . <<<"$body" >/dev/null 2>&1; then
+      printf '%s\n' "$body" >"$RULES"
+      return 0
+    fi
+    if [[ $code == 403 ]] && rules_feature_unavailable "$body"; then
+      printf '[]\n' >"$RULES"
+      return 0
+    fi
+    return 1
+  fi
 
   if fetch_json "$RULES" gh api "repos/$OWNER/$REPO/rules/branches/$BASE_PATH"; then
+    return 0
+  fi
+
+  body=$(gh api "repos/$OWNER/$REPO/rules/branches/$BASE_PATH" 2>&1 || true)
+  if rules_feature_unavailable "$body"; then
+    printf '[]\n' >"$RULES"
     return 0
   fi
 
@@ -234,16 +350,50 @@ fetch_rules() {
   return 1
 }
 
+THREADS_QUERY='query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+  repository(owner:$owner,name:$repo){pullRequest(number:$pr){
+    reviewThreads(first:100,after:$endCursor){
+      nodes{isResolved comments(first:1){nodes{author{login}}}}
+      pageInfo{hasNextPage endCursor}}}}}'
+
+# One GraphQL page over curl. Prints the page body; fails on transport errors,
+# GraphQL errors, or a missing pullRequest node.
+graphql_page() {
+  local cursor=$1 payload resp code body
+  payload=$(jq -cn --arg query "$THREADS_QUERY" --arg owner "$OWNER" --arg repo "$REPO" \
+    --argjson pr "$PR" --arg cursor "$cursor" \
+    '{query:$query, variables:{owner:$owner, repo:$repo, pr:$pr,
+      endCursor:(if $cursor == "" then null else $cursor end)}}') || return 1
+  resp=$(curl -sS -w $'\n%{http_code}' \
+    -H "Authorization: Bearer $API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "$payload" "$API/graphql") || return 1
+  code=${resp##*$'\n'}
+  body=${resp%$'\n'*}
+  [[ $code == 200 ]] || return 1
+  jq -e '((.errors // []) | length == 0) and (.data.repository.pullRequest != null)' \
+    <<<"$body" >/dev/null 2>&1 || return 1
+  printf '%s' "$body"
+}
+
 # Re-review cycles gate on unresolved CodeRabbit threads instead of a review
 # body CodeRabbit will never re-emit, so the waiter needs the thread state.
 fetch_threads() {
-  fetch_json "$THREADS" gh api graphql --paginate -f query='
-    query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
-      repository(owner:$owner,name:$repo){pullRequest(number:$pr){
-        reviewThreads(first:100,after:$endCursor){
-          nodes{isResolved comments(first:1){nodes{author{login}}}}
-          pageInfo{hasNextPage endCursor}}}}}' \
-    -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" || return 1
+  if [[ $GH_MODE == gh ]]; then
+    fetch_json "$THREADS" gh api graphql --paginate -f query="$THREADS_QUERY" \
+      -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" || return 1
+  else
+    local pages="$WORK_DIR/threads.next.jsonl" cursor="" page hasNext
+    : >"$pages"
+    while :; do
+      page=$(graphql_page "$cursor") || { rm -f "$pages"; return 1; }
+      printf '%s\n' "$page" >>"$pages"
+      hasNext=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$page" 2>/dev/null) || { rm -f "$pages"; return 1; }
+      [[ $hasNext == true ]] || break
+      cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$page")
+    done
+    mv "$pages" "$THREADS"
+  fi
 
   UNRESOLVED_CR_THREADS=$(jq -s '
     [.[].data.repository.pullRequest.reviewThreads.nodes[]?
@@ -344,12 +494,23 @@ probe() {
   local failed=0
 
   fetch_snapshot || failed=1
-  fetch_json "$PR_STATE" gh pr view "$PR" --repo "$REPOSITORY" \
-    --json statusCheckRollup || failed=1
   fetch_rules || failed=1
   if ((RE_REVIEW)); then fetch_threads || failed=1; fi
 
   if ((failed)); then return 1; fi
+
+  # The rollup is only needed — and often only readable — when the ruleset
+  # actually requires checks. A limited token can read PRs yet 403 on
+  # check-runs ("Resource not accessible by personal access token"); with zero
+  # required contexts that blindness is harmless, so don't fail the probe over
+  # a surface nothing consumes. With required contexts present it stays
+  # fail-closed.
+  if (( $(jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?.context] | length' "$RULES") > 0 )); then
+    fetch_rollup || return 1
+  else
+    printf '{"statusCheckRollup":[]}\n' >"$PR_STATE"
+  fi
+
   classify_reviews
   classify_checks
   return 0

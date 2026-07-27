@@ -23,33 +23,43 @@ Human reviewers never gate the verdict, but their unresolved review threads stil
 block `pass`: triage every unresolved thread in Section 4 regardless of who
 opened it.
 
-## 0. Preflight, or stop
+## 0. Preflight: pick one transport, or stop
 
-This skill needs real tools. Run this check first, before anything else:
+This skill needs `bash`, `jq`, `git`, and exactly one working **GitHub API
+transport**. Probe in this order, before anything else:
 
 ```bash
-for c in bash gh jq git; do command -v "$c" >/dev/null || echo "MISSING: $c"; done
-gh auth status >/dev/null 2>&1 || echo "MISSING: gh authentication"
+for c in bash jq git; do command -v "$c" >/dev/null || echo "MISSING: $c"; done
+# Transport A: gh — must work END TO END, not just auth. In a macOS command
+# sandbox, `gh auth status` can pass while every API call dies on TLS
+# (`x509: OSStatus …`), because Go's platform verifier needs the keychain.
+gh api rate_limit >/dev/null 2>&1 && echo "TRANSPORT: gh"
+# Transport B: curl + token — a complete equivalent, not a degraded fallback.
+[ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] && \
+  curl -fsS -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
+    https://api.github.com/rate_limit >/dev/null 2>&1 && echo "TRANSPORT: curl"
 ```
 
-If anything prints `MISSING`, **stop the skill immediately.** Report exactly what
-is unavailable and end the turn. A sandboxed agent will not be able to review a
-PR, and a partial review is worse than none: it produces a confident verdict from
-data it could not read.
+Pick the first transport that works and use it for **every** call in this run —
+the same REST/GraphQL endpoints either way (the `gh api` commands below name the
+canonical paths; in curl mode hit the same paths with the token header). Never
+mix transports call-by-call within a cycle, and never downgrade to partial
+substitutes.
 
-Do not work around a missing dependency. Specifically, never:
+If `bash`/`jq`/`git` is missing, or neither transport works, **stop the skill
+immediately.** Report exactly what is unavailable and end the turn. A partial
+review is worse than none: it produces a confident verdict from data it could
+not read. Do not work around it. Specifically, never:
 
-- call the GitHub REST/GraphQL API with `curl`, a fetch tool, or a web-browsing
-  tool because `gh` is absent or unauthenticated;
 - install, download, or build `gh`, `jq`, or any other dependency;
-- parse `gh` output with `sed`/`awk`/`grep` because `jq` is missing;
+- parse command output with `sed`/`awk`/`grep` because `jq` is missing;
 - substitute local `git log`, the PR page's HTML, or your own reading of the diff
   for the review surfaces in Section 3;
 - emit a verdict — including `needs-changes` — from an incomplete snapshot.
 
 The stop message is the deliverable in that case. Say which tool is missing and
-what the operator needs to do (install it, run `gh auth login`, or run the skill
-outside the sandbox).
+what the operator needs to do (install it, run `gh auth login`, export
+`GH_TOKEN`, or run the skill outside the sandbox).
 
 ## 1. Anchor one cycle
 
@@ -73,12 +83,18 @@ Use the API committer date; local `git log` can preserve a non-UTC zone. A
 finding belongs to this cycle when its `commit_id` is `HEAD_SHA`, its timestamp
 is at or after either anchor, or its body cites the full/short SHA.
 
-If a `gh` call fails here — auth expired, repository not visible, network
-blocked — stop as in Section 0 rather than reaching for another transport.
+If an API call fails here — auth expired, repository not visible, network
+blocked — re-run the Section 0 probe once and switch to the other transport for
+the whole cycle if it passes; if neither transport works, stop as in Section 0.
 
 ## 2. Wait without model turns
 
-Resolve `scripts/wait-for-reviews.sh` relative to this skill. Run it with the PR,
+Resolve `scripts/wait-for-reviews.sh` relative to this skill. Skill directories
+are often symlinks into a path the command sandbox cannot read (e.g.
+`~/.claude/skills/x -> ~/.agents/skills/x`); if invoking the script fails with
+a permission error, copy it byte-for-byte to `$TMPDIR` with the harness file
+tools (Read → Write, which are not command-sandboxed) and run the copy — same
+arguments, same contract. Run it with the PR,
 HEAD, anchors, and base branch. It silently checks CodeRabbit's artifacts and the
 ruleset-required status checks, preserves the last good snapshot, and emits one
 terminal JSON object.
@@ -93,9 +109,14 @@ notification resumes the main session.
 On another harness, run the helper in one long-lived execution and use that
 harness's process-wait primitive. Never implement an LLM polling loop.
 
+The helper selects its own transport the same way Section 0 does: `gh` when a
+real API call works, otherwise curl with `GH_TOKEN`/`GITHUB_TOKEN`. In a
+sandbox where only direct `gh` invocations are exempted, the helper's *nested*
+`gh` calls are still confined — export the token so its curl path engages:
+
 ```bash
 WATCHER=skills/review-pr/scripts/wait-for-reviews.sh
-"$WATCHER" \
+GH_TOKEN="$GH_TOKEN" "$WATCHER" \
   --owner "$OWNER" --repo "$REPO" --pr "$PR" --base "$BASE" \
   --head "$HEAD_SHA" --review-start "$REVIEW_START" \
   --commit-date "$COMMIT_DATE" \
@@ -124,8 +145,9 @@ At this decision point, enforce all of these:
   misses it.
 - If state is `failed`, `timeout`, or `snapshot_fetch_failing`, read
   [reviewer-edge-cases.md](references/reviewer-edge-cases.md) before judging it.
-- If the helper exits `2` with no JSON, a dependency or `gh` credential is
-  missing. Stop as in Section 0 — do not retry it and do not review by hand.
+- If the helper exits `2` with no JSON, a dependency is missing or both
+  transports failed. Stop as in Section 0 — do not retry it and do not review
+  by hand.
 
 `ready` means waiting is complete, not that the PR passes. The final snapshot
 and triage remain authoritative. `confirmed_no_new_findings` (re-review cycles
@@ -241,7 +263,10 @@ covers it; otherwise leave it unresolved and tell the user.
 ## 5. Verify, push, and repeat
 
 Every ruleset-required check must be `SUCCESS`/`SKIPPED`; a missing required
-context is pending. A ruleset lookup failure is `needs-changes`. A required
+context is pending. A ruleset lookup failure is `needs-changes` — with one
+carve-out: HTTP 403 with "Upgrade to GitHub Pro or make this repository public"
+means the rules feature is unavailable on this plan, so no rules can exist;
+treat that as an empty ruleset (no required checks), not a failed lookup. A required
 `pull_request` approval gate only evaluates once the PR is ready for review; on a
 draft PR report it as deferred instead of waiting for it.
 `BLOCKED`/`DIRTY`/`UNKNOWN` blocks unless only that ready-only gate remains with
