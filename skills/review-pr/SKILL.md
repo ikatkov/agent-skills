@@ -23,6 +23,34 @@ Human reviewers never gate the verdict, but their unresolved review threads stil
 block `pass`: triage every unresolved thread in Section 4 regardless of who
 opened it.
 
+## 0. Preflight, or stop
+
+This skill needs real tools. Run this check first, before anything else:
+
+```bash
+for c in bash gh jq git; do command -v "$c" >/dev/null || echo "MISSING: $c"; done
+gh auth status >/dev/null 2>&1 || echo "MISSING: gh authentication"
+```
+
+If anything prints `MISSING`, **stop the skill immediately.** Report exactly what
+is unavailable and end the turn. A sandboxed agent will not be able to review a
+PR, and a partial review is worse than none: it produces a confident verdict from
+data it could not read.
+
+Do not work around a missing dependency. Specifically, never:
+
+- call the GitHub REST/GraphQL API with `curl`, a fetch tool, or a web-browsing
+  tool because `gh` is absent or unauthenticated;
+- install, download, or build `gh`, `jq`, or any other dependency;
+- parse `gh` output with `sed`/`awk`/`grep` because `jq` is missing;
+- substitute local `git log`, the PR page's HTML, or your own reading of the diff
+  for the review surfaces in Section 3;
+- emit a verdict — including `needs-changes` — from an incomplete snapshot.
+
+The stop message is the deliverable in that case. Say which tool is missing and
+what the operator needs to do (install it, run `gh auth login`, or run the skill
+outside the sandbox).
+
 ## 1. Anchor one cycle
 
 Resolve the current branch PR with `gh pr view --json number,headRefOid`. With no
@@ -45,9 +73,8 @@ Use the API committer date; local `git log` can preserve a non-UTC zone. A
 finding belongs to this cycle when its `commit_id` is `HEAD_SHA`, its timestamp
 is at or after either anchor, or its body cites the full/short SHA.
 
-If `gh` auth fails and GitHub app tools are available, use their PR, review,
-comment, reply, and resolve-thread operations; retain the same exact-HEAD and
-three-surface rules.
+If a `gh` call fails here — auth expired, repository not visible, network
+blocked — stop as in Section 0 rather than reaching for another transport.
 
 ## 2. Wait without model turns
 
@@ -85,6 +112,8 @@ At this decision point, enforce all of these:
   the helper once with `--tagged-coderabbit`. Never retag.
 - If state is `failed`, `timeout`, or `snapshot_fetch_failing`, read
   [reviewer-edge-cases.md](references/reviewer-edge-cases.md) before judging it.
+- If the helper exits `2` with no JSON, a dependency or `gh` credential is
+  missing. Stop as in Section 0 — do not retry it and do not review by hand.
 
 `ready` means waiting is complete, not that the PR passes. The final snapshot
 and triage remain authoritative.

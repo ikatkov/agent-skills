@@ -72,10 +72,21 @@ fi
 
 for command in gh jq mktemp; do
   if ! command -v "$command" >/dev/null 2>&1; then
-    printf 'required command not found: %s\n' "$command" >&2
+    printf 'required command not found: %s — stop the review, do not work around it\n' "$command" >&2
     exit 2
   fi
 done
+
+# Fail fast instead of spending the whole wait budget on calls that cannot work.
+if ! gh auth status >/dev/null 2>&1; then
+  printf 'gh is not authenticated — stop the review and run `gh auth login`\n' >&2
+  exit 2
+fi
+
+if ! gh api "repos/$OWNER/$REPO" --jq .full_name >/dev/null 2>&1; then
+  printf 'cannot read %s/%s with the current gh credentials — stop the review\n' "$OWNER" "$REPO" >&2
+  exit 2
+fi
 
 SHORT_SHA=${HEAD_SHA:0:9}
 REPOSITORY="$OWNER/$REPO"
