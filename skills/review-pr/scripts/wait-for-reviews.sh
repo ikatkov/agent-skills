@@ -22,6 +22,13 @@ Options:
   --tag-after SECONDS           Missing-bot fallback delay (default: 60)
   --once                        Probe once without sleeping
   --tagged-coderabbit           CodeRabbit fallback tag was already posted
+  --re-review-cycle             This wait follows a fix push for findings from
+                                an exact-HEAD review at the previous anchor.
+                                CodeRabbit reviews incrementally and never
+                                re-posts a review body for a fix-only push, so
+                                accept in-thread confirmations at the new HEAD
+                                plus zero unresolved CodeRabbit threads as the
+                                terminal state confirmed_no_new_findings.
 EOF
 }
 
@@ -37,6 +44,7 @@ TIMEOUT=900
 TAG_AFTER=60
 ONCE=0
 TAGGED_CODERABBIT=0
+RE_REVIEW=0
 
 while (($#)); do
   case "$1" in
@@ -52,6 +60,7 @@ while (($#)); do
     --tag-after) TAG_AFTER=${2:-}; shift 2 ;;
     --once) ONCE=1; shift ;;
     --tagged-coderabbit) TAGGED_CODERABBIT=1; shift ;;
+    --re-review-cycle) RE_REVIEW=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -97,10 +106,12 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 SNAPSHOT="$WORK_DIR/snapshot.json"
 PR_STATE="$WORK_DIR/pr-state.json"
 RULES="$WORK_DIR/rules.json"
+THREADS="$WORK_DIR/threads.json"
 
 printf '[]\n' >"$SNAPSHOT"
 printf '{}\n' >"$PR_STATE"
 printf '[]\n' >"$RULES"
+printf '{}\n' >"$THREADS"
 
 STARTED_EPOCH=$(date +%s)
 
@@ -109,6 +120,7 @@ CHECKS_STATUS="pending"
 CR_SEEN=false
 PENDING_CHECKS='[]'
 FAILED_CHECKS='[]'
+UNRESOLVED_CR_THREADS=null
 
 emit() {
   local state=$1
@@ -125,6 +137,7 @@ emit() {
     --argjson needs_tag "$needs_tag" \
     --argjson pending_checks "$PENDING_CHECKS" \
     --argjson failed_checks "$FAILED_CHECKS" \
+    --argjson unresolved_cr_threads "$UNRESOLVED_CR_THREADS" \
     '{
       state: $state,
       reason: $reason,
@@ -135,7 +148,8 @@ emit() {
       checks: $checks,
       needs_tag: $needs_tag,
       pending_checks: $pending_checks,
-      failed_checks: $failed_checks
+      failed_checks: $failed_checks,
+      unresolved_coderabbit_threads: $unresolved_cr_threads
     }'
 }
 
@@ -220,6 +234,25 @@ fetch_rules() {
   return 1
 }
 
+# Re-review cycles gate on unresolved CodeRabbit threads instead of a review
+# body CodeRabbit will never re-emit, so the waiter needs the thread state.
+fetch_threads() {
+  fetch_json "$THREADS" gh api graphql --paginate -f query='
+    query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+      repository(owner:$owner,name:$repo){pullRequest(number:$pr){
+        reviewThreads(first:100,after:$endCursor){
+          nodes{isResolved comments(first:1){nodes{author{login}}}}
+          pageInfo{hasNextPage endCursor}}}}}' \
+    -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" || return 1
+
+  UNRESOLVED_CR_THREADS=$(jq -s '
+    [.[].data.repository.pullRequest.reviewThreads.nodes[]?
+      | select(.isResolved == false)
+      | select(((.comments.nodes[0].author.login // "") | ascii_downcase)
+          | startswith("coderabbitai"))
+    ] | length' "$THREADS") || return 1
+}
+
 snapshot_query() {
   local query=$1
   jq -r \
@@ -253,6 +286,24 @@ classify_reviews() {
   if [[ $cr_substantive == true ]]; then CR_STATUS="responded"
   elif [[ $cr_unavailable == true ]]; then CR_STATUS="unavailable"
   else CR_STATUS="in-progress"
+  fi
+
+  # On a fix-only push, CodeRabbit confirms in-thread and answers a forced
+  # re-review with "Review finished"; it never re-posts a review body for a
+  # commit it already processed incrementally. Treat that as terminal instead
+  # of grinding the full wait budget to timeout. Cycle-1 strictness is kept:
+  # this branch only runs with --re-review-cycle.
+  if [[ $RE_REVIEW -eq 1 && $CR_STATUS == in-progress ]]; then
+    local cr_at_head
+    cr_at_head=$(snapshot_query '
+      def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
+      any(.[]; .login == "coderabbitai[bot]" and (
+        (.surface == "review" and .commit == $sha) or
+        (scope and ((.body // "") | test("no new commits to review|review finished"; "i")))
+      ))')
+    if [[ $cr_at_head == true && $UNRESOLVED_CR_THREADS == 0 ]]; then
+      CR_STATUS="confirmed_no_new_findings"
+    fi
   fi
 }
 
@@ -296,6 +347,7 @@ probe() {
   fetch_json "$PR_STATE" gh pr view "$PR" --repo "$REPOSITORY" \
     --json statusCheckRollup || failed=1
   fetch_rules || failed=1
+  if ((RE_REVIEW)); then fetch_threads || failed=1; fi
 
   if ((failed)); then return 1; fi
   classify_reviews
@@ -323,6 +375,11 @@ while :; do
   if ((elapsed >= TAG_AFTER)) && ((TAGGED_CODERABBIT == 0)) \
     && [[ $CR_STATUS == in-progress && $CR_SEEN == false ]]; then
     emit "needs_tag" "tag CodeRabbit once, then restart the waiter with --tagged-coderabbit" '["coderabbit"]'
+    exit 0
+  fi
+
+  if [[ $CR_STATUS == confirmed_no_new_findings ]] && [[ $CHECKS_STATUS == ready ]]; then
+    emit "confirmed_no_new_findings" "CodeRabbit confirmed the pushed fixes at the new HEAD with zero unresolved CodeRabbit threads; it will not re-post a review body for an already-reviewed commit" '[]'
     exit 0
   fi
 

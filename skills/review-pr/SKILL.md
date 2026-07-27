@@ -102,6 +102,14 @@ WATCHER=skills/review-pr/scripts/wait-for-reviews.sh
   --interval 50 --timeout 900
 ```
 
+On every cycle after the first — the wait that follows pushing fixes for
+findings from an exact-HEAD review at the previous anchor — add
+`--re-review-cycle`. CodeRabbit reviews incrementally and will never re-post a
+review body for a fix-only push; it confirms fixes in-thread and answers a
+forced re-review with "Review finished". The flag lets the waiter accept that
+as the terminal state `confirmed_no_new_findings` instead of burning the whole
+budget on an artifact that cannot appear.
+
 At this decision point, enforce all of these:
 
 - Do not call `sleep` directly; sleeping is inside the helper/Monitor.
@@ -109,14 +117,21 @@ At this decision point, enforce all of these:
   start a second monitor, or narrate heartbeats while the helper runs.
 - Keep the monitor silent. Only its terminal JSON should wake the model.
 - If state is `needs_tag`, post one `@coderabbitai review` comment, then restart
-  the helper once with `--tagged-coderabbit`. Never retag.
+  the helper once with `--tagged-coderabbit` (keep `--re-review-cycle` if it was
+  set). Never retag. If you filter comments by time afterwards, derive `since=`
+  from the posted tag comment's `created_at` in the API response, not from your
+  own clock — CodeRabbit can reply within seconds and a self-derived window
+  misses it.
 - If state is `failed`, `timeout`, or `snapshot_fetch_failing`, read
   [reviewer-edge-cases.md](references/reviewer-edge-cases.md) before judging it.
 - If the helper exits `2` with no JSON, a dependency or `gh` credential is
   missing. Stop as in Section 0 — do not retry it and do not review by hand.
 
 `ready` means waiting is complete, not that the PR passes. The final snapshot
-and triage remain authoritative.
+and triage remain authoritative. `confirmed_no_new_findings` (re-review cycles
+only) is likewise complete waiting: CodeRabbit engaged at the new HEAD and left
+zero unresolved CodeRabbit threads. Proceed to Section 3 as with `ready`; the
+acceptance rule in Section 6 says what counts as its exact-HEAD response.
 
 ## 3. Fetch one final snapshot
 
@@ -159,9 +174,11 @@ Also fetch the base ruleset and
 A failed snapshot or ruleset lookup fails closed; never interpret an empty
 payload as clean.
 
-Read bodies rather than trusting check success. A CodeRabbit walkthrough, a
-`review in progress` note, or a green CodeRabbit check with no review body and no
-inline finding is engagement, not a review.
+Read bodies rather than trusting check success. On the first cycle, a CodeRabbit
+walkthrough, a `review in progress` note, or a green CodeRabbit check with no
+review body and no inline finding is engagement, not a review. On a re-review
+cycle, judge against the acceptance rule in Section 6 instead — in-thread
+confirmations at the new HEAD are the review artifact there.
 
 ## 4. Triage against the scope contract, then fix
 
@@ -242,9 +259,9 @@ If the accepted fixes made the PR description inaccurate, update the description
 to match what the PR now does. Never let the diff drift ahead of its stated
 scope.
 
-Push fixes, re-anchor the new HEAD, and run another deterministic wait. Cap at
-five cycles; each cycle must make a concrete fix. Stop on repeated or
-non-actionable churn.
+Push fixes, re-anchor the new HEAD, and run another deterministic wait with
+`--re-review-cycle` set (Section 2). Cap at five cycles; each cycle must make a
+concrete fix. Stop on repeated or non-actionable churn.
 
 ## 5a. Re-arm on only-waiting, don't dead-end a pending PR
 
@@ -291,12 +308,27 @@ GITHUB_REVIEW_RESULT:
 - Summary: <1-2 sentences>
 ```
 
-Return `pass` only when CodeRabbit delivered a substantive exact-HEAD review,
+Return `pass` only when CodeRabbit delivered an exact-HEAD response,
 every in-scope finding is fixed, every out-of-scope one is answered and listed in
 the verdict, all threads are resolved, and every required check is
 `SUCCESS`/`SKIPPED`. A PR that ships exactly what its description promised and
 nothing more is the goal; declining scope creep is a `pass`, not a
 `needs-changes`.
+
+What counts as CodeRabbit's exact-HEAD response depends on the cycle:
+
+- **Cycle 1:** only a substantive review at `HEAD_SHA` — a nonzero-body review
+  or inline findings. "No new commits to review" on a never-reviewed PR is a
+  failure, not a review.
+- **Cycle N>1** (fixes pushed for findings from an exact-HEAD review at the
+  previous anchor): CodeRabbit does not re-review commits it already processed
+  incrementally, so accept any one of:
+  - a nonzero-body review at the new HEAD (what it posts when the push contains
+    substantive new code);
+  - confirmation replies in the fixed threads whose wrapper reviews carry the
+    new HEAD's `commit_id`, with zero CodeRabbit threads left unresolved;
+  - a forced `@coderabbitai review` returning "Review finished" with no new
+    findings.
 
 `pass` means reviewed and ready to merge — nothing about whether the change
 merges, builds, deploys, or works live. Never merge from this skill; hand back to

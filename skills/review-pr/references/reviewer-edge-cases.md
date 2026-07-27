@@ -6,8 +6,19 @@ review artifact.
 
 ## CodeRabbit
 
-- A walkthrough (`summarize by coderabbit.ai`), `review in progress`, or
-  `No new commits to review` is engagement, not a substantive review.
+- On the **first review cycle**, a walkthrough (`summarize by coderabbit.ai`),
+  `review in progress`, or `No new commits to review` is engagement, not a
+  substantive review.
+- On a **re-review cycle** (fixes pushed for findings CodeRabbit already
+  reviewed), that same line means the opposite: CodeRabbit reviews
+  incrementally and never re-posts a review body for a commit it already
+  processed. It verifies the pushed fixes in-thread — confirmation replies
+  whose wrapper reviews carry the new HEAD's `commit_id`, often auto-resolving
+  the threads — and answers a forced `@coderabbitai review` with "Review
+  finished". Those confirmations plus zero unresolved CodeRabbit threads are
+  completion, not engagement; waiting longer cannot produce a review body it
+  will never emit. Run the waiter with `--re-review-cycle` so it stops on
+  `confirmed_no_new_findings` instead of grinding to `timeout`.
 - A green CodeRabbit check without a review body or inline finding is not a
   substantive review artifact.
 - Scope inline comments by their stable `original_commit_id`, not the movable
@@ -20,6 +31,11 @@ review artifact.
 - CodeRabbit answers `@coderabbitai review` only once per push in some
   configurations. Tag at most once per cycle; if the tag produces nothing within
   the budget, report `timeout` rather than tagging again.
+- After posting a tag, take the tag comment's `created_at` from the API
+  response as the anchor for any `since=` comment filtering. CodeRabbit can
+  reply within seconds; a window derived from your own clock or a later
+  timestamp silently drops that reply and makes a finished review look like
+  silence.
 - On a fork PR, CodeRabbit may be configured off entirely. Check whether it has
   ever commented on this repository before waiting out a second full budget.
 
