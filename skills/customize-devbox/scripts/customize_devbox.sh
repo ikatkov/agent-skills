@@ -56,8 +56,9 @@ Target changes:
   5. Install the tpack 1.0.0 Debian package matching the target architecture:
        https://github.com/tmuxpack/tpack/releases/download/v1.0.0/tpack_1.0.0_linux_<arch>.deb
   6. Replace ~/.tmux.conf with the bundled assets/tmux.conf template. It sets the
-     parent terminal (iTerm2) tab title from a #() job:
-       set -g set-titles-string "#(~/.tmux/bin/title.sh #{pane_pid} '#{pane_current_path}')"
+     parent terminal (iTerm2) tab title from a #() job (#{q:...} shell-escapes the
+     path so a directory name cannot inject commands):
+       set -g set-titles-string "#(~/.tmux/bin/title.sh #{pane_pid} #{q:pane_current_path})"
   7. Install the bundled assets/title.sh to ~/.tmux/bin/title.sh (chmod +x). It
      renders the tab title as <host>, <host> · TICKET, or <host> · TICKET · PR #n.
   8. Run tmux source-file ~/.tmux.conf when tmux is available and a tmux
