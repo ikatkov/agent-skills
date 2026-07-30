@@ -35,35 +35,38 @@ Target requirements:
   - ssh mode: ssh access
   - sbx mode: sandbox access through sbx
   - sudo, wget, dpkg, awk, grep, and mktemp on the target
-  - apt-get on the target when tmux is missing
+  - apt-get on the target when tmux or psmisc is missing
   - interactive sudo if sudo credentials are not cached; sbx mode generally
     requires passwordless sudo for non-interactive package installation
+  - git and gh on the target are optional: the tab title adds the branch ticket
+    id when git is present and the open-PR number when gh is authenticated,
+    and degrades gracefully to the bare hostname otherwise
 
 Target changes:
   1. Install rsub:
        sudo wget -O /usr/local/bin/rsub https://raw.github.com/aurora/rmate/master/rmate
        sudo chmod +x /usr/local/bin/rsub
   2. Install tmux with apt-get if it is missing.
-  3. Add a managed tmux auto-attach block to ~/.bashrc:
+  3. Install psmisc (pstree) with apt-get if it is missing; title.sh uses it to
+     detect a Claude session in the pane process tree.
+  4. Add a managed tmux auto-attach block to ~/.bashrc:
        if { [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SANDBOX_VM_ID:-}" ]; } && [ -z "${TMUX:-}" ] && [[ $- == *i* ]]; then
          tmux attach-session -t main || tmux new-session -s main
        fi
-  4. Install the tpack 1.0.0 Debian package matching the target architecture:
+  5. Install the tpack 1.0.0 Debian package matching the target architecture:
        https://github.com/tmuxpack/tpack/releases/download/v1.0.0/tpack_1.0.0_linux_<arch>.deb
-  5. Replace ~/.tmux.conf with the bundled assets/tmux.conf template:
-       set -g @plugin "tmux-plugins/tmux-sensible"
-       set -g @plugin "sainnhe/tmux-fzf"
-       set -g status-right ''
-       set -g status-left '#H #S '
-       set -g status-left-length 100
-       set -g status-justify left
-       run "tpack init"
-  6. Run tmux source-file ~/.tmux.conf when tmux is available and a tmux
+  6. Replace ~/.tmux.conf with the bundled assets/tmux.conf template. It sets the
+     parent terminal (iTerm2) tab title from a #() job:
+       set -g set-titles-string "#(~/.tmux/bin/title.sh #{pane_pid} '#{pane_current_path}')"
+  7. Install the bundled assets/title.sh to ~/.tmux/bin/title.sh (chmod +x). It
+     renders the tab title as <host>, <host> · TICKET, or <host> · TICKET · PR #n.
+  8. Run tmux source-file ~/.tmux.conf when tmux is available and a tmux
      server is already running. New sessions read ~/.tmux.conf automatically.
 
 Idempotence:
   The script rewrites only its own marked block in ~/.bashrc.
-  It replaces ~/.tmux.conf with the same bundled local template on every run.
+  It replaces ~/.tmux.conf and ~/.tmux/bin/title.sh with the same bundled local
+  templates on every run.
   Existing unmarked tmux auto-attach setup is detected and left unchanged.
 
 Troubleshooting:
@@ -180,6 +183,13 @@ if [[ ! -r "$tmux_conf_template" ]]; then
   exit 1
 fi
 
+# tmux.conf's set-titles-string runs this script; ship them together.
+title_script_template="${script_dir}/../assets/title.sh"
+if [[ ! -r "$title_script_template" ]]; then
+  echo "Error: missing bundled title script: ${title_script_template}" >&2
+  exit 1
+fi
+
 scp_args=()
 for arg in "${ssh_args[@]}"; do
   if [[ "$arg" == "-p" ]]; then
@@ -224,6 +234,27 @@ copy_tmux_conf() {
         exit 1
       fi
       sbx cp "$tmux_conf_template" "${target}:${home}/.tmux.conf"
+      ;;
+  esac
+}
+
+copy_title_script() {
+  case "$transport" in
+    ssh)
+      ssh "${ssh_args[@]}" "$target" 'mkdir -p ~/.tmux/bin'
+      scp "${scp_args[@]}" "$title_script_template" "${target}:~/.tmux/bin/title.sh"
+      ssh "${ssh_args[@]}" "$target" 'chmod +x ~/.tmux/bin/title.sh'
+      ;;
+    sbx)
+      local home
+      home="$(remote_home)"
+      if [[ -z "$home" ]]; then
+        echo "Error: could not resolve sandbox HOME" >&2
+        exit 1
+      fi
+      sbx exec "$target" sh -lc 'mkdir -p ~/.tmux/bin'
+      sbx cp "$title_script_template" "${target}:${home}/.tmux/bin/title.sh"
+      sbx exec "$target" sh -lc 'chmod +x ~/.tmux/bin/title.sh'
       ;;
   esac
 }
@@ -316,6 +347,20 @@ install_tmux() {
   sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y tmux
 }
 
+install_psmisc() {
+  # title.sh walks the pane process tree with pstree to detect a Claude session;
+  # without it the tab title degrades to the bare hostname.
+  if command -v pstree >/dev/null 2>&1; then
+    echo "pstree is already installed."
+    return
+  fi
+
+  require_command apt-get
+
+  echo "Installing psmisc (pstree)..."
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y psmisc
+}
+
 configure_bashrc() {
   local bashrc="$HOME/.bashrc"
   local begin="# >>> customize-devbox tmux auto-attach >>>"
@@ -382,12 +427,16 @@ install_tpack() {
 
 install_rsub
 install_tmux
+install_psmisc
 configure_bashrc
 install_tpack
 REMOTE_SETUP
 
 echo "Copying bundled tmux template to target ~/.tmux.conf..."
 copy_tmux_conf
+
+echo "Copying bundled title script to target ~/.tmux/bin/title.sh..."
+copy_title_script
 
 echo "Sourcing target ~/.tmux.conf..."
 remote_exec bash -s <<'REMOTE_TMUX_SOURCE'
