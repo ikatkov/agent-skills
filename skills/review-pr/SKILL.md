@@ -198,7 +198,9 @@ payload as clean.
 
 Read bodies rather than trusting check success. On the first cycle, a CodeRabbit
 walkthrough, a `review in progress` note, or a green CodeRabbit check with no
-review body and no inline finding is engagement, not a review. On a re-review
+review body and no inline finding is engagement, not a review. A review whose
+state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA` is a verdict, whatever
+its body length. On a re-review
 cycle, judge against the acceptance rule in Section 6 instead — in-thread
 confirmations at the new HEAD are the review artifact there.
 
@@ -342,9 +344,13 @@ nothing more is the goal; declining scope creep is a `pass`, not a
 
 What counts as CodeRabbit's exact-HEAD response depends on the cycle:
 
-- **Cycle 1:** only a substantive review at `HEAD_SHA` — a nonzero-body review
-  or inline findings. "No new commits to review" on a never-reviewed PR is a
-  failure, not a review.
+- **Cycle 1:** a substantive response at `HEAD_SHA`, which is any one of a
+  nonzero-body review, inline findings, or a review carrying the state
+  `APPROVED` or `CHANGES_REQUESTED` on that exact commit. The state counts on
+  its own because CodeRabbit approves with an empty body when it has nothing to
+  say, which is the shape of every clean review — waiting for prose that will
+  never arrive burns the whole budget on a verdict already given. "No new
+  commits to review" on a never-reviewed PR stays a failure.
 - **Cycle N>1** (fixes pushed for findings from an exact-HEAD review at the
   previous anchor): CodeRabbit does not re-review commits it already processed
   incrementally, so accept any one of:
