@@ -253,7 +253,7 @@ fetch_snapshot() {
   fi
 
   if api_elements "repos/$OWNER/$REPO/pulls/$PR/reviews" 2>/dev/null \
-      | jq -c '{surface:"review",login:.user.login,id,ts:.submitted_at,commit:.commit_id,path:null,line:null,url:.html_url,body}' >"$reviews" 2>/dev/null \
+      | jq -c '{surface:"review",login:.user.login,id,ts:.submitted_at,commit:.commit_id,state:.state,path:null,line:null,url:.html_url,body}' >"$reviews" 2>/dev/null \
     && api_elements "repos/$OWNER/$REPO/pulls/$PR/comments" 2>/dev/null \
       | jq -c '{surface:"inline",login:.user.login,id,ts:.created_at,commit:(.original_commit_id // .commit_id),path,line,url:.html_url,body}' >"$comments" 2>/dev/null \
     && jq -s 'sort_by(.ts // "")' "$issues" "$reviews" "$comments" >"$next"; then
@@ -423,14 +423,33 @@ classify_reviews() {
   cr_unavailable=$(snapshot_query "
     def scope: (.commit == \$sha) or ((.ts // \"\") >= \$review_start) or ((.ts // \"\") >= \$commit_date) or ((.body // \"\") | contains(\$sha) or contains(\$short));
     any(.[]; .login == \"coderabbitai[bot]\" and scope and ((.body // \"\") | test(\"$unavailable_regex\"; \"i\")))")
+  # A verdict counts two ways. Prose — an inline finding, or a review body that
+  # is more than CodeRabbit's own chatter. And a *state* on this exact commit:
+  # CodeRabbit posts APPROVED with an empty body when it has nothing to say,
+  # which is the shape of every clean review. Reading only prose leaves that
+  # approval invisible and grinds the whole wait budget to timeout — observed on
+  # qrz-bot#62, where APPROVED landed 85 seconds into a 950-second wait and the
+  # waiter still reported in-progress.
+  #
+  # The state branch is anchored to `.commit == $sha` rather than the looser
+  # `scope`, because a review state means something only for the commit it
+  # names. That keeps the exact-HEAD guarantee the whole skill rests on.
   local cr_substantive
   cr_substantive=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
     def chatter: test("summarize by coderabbit\\.ai|review in progress|processing new changes|no new commits to review"; "i");
+    def verdict_state: (.state // "") | ascii_upcase | . == "APPROVED" or . == "CHANGES_REQUESTED";
     any(.[];
-      .login == "coderabbitai[bot]" and scope and
-      ((.body // "") | length > 0) and
-      ((.surface == "inline") or (.surface == "review" and (((.body // "") | chatter) | not)))
+      .login == "coderabbitai[bot]" and
+      (
+        (
+          scope and
+          ((.body // "") | length > 0) and
+          ((.surface == "inline") or (.surface == "review" and (((.body // "") | chatter) | not)))
+        )
+        or
+        (.surface == "review" and .commit == $sha and verdict_state)
+      )
     )')
 
   if [[ $cr_substantive == true ]]; then CR_STATUS="responded"
