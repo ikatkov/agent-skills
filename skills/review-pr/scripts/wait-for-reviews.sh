@@ -427,9 +427,8 @@ classify_reviews() {
   # is more than CodeRabbit's own chatter. And a *state* on this exact commit:
   # CodeRabbit posts APPROVED with an empty body when it has nothing to say,
   # which is the shape of every clean review. Reading only prose leaves that
-  # approval invisible and grinds the whole wait budget to timeout — observed on
-  # qrz-bot#62, where APPROVED landed 85 seconds into a 950-second wait and the
-  # waiter still reported in-progress.
+  # approval invisible and grinds the whole wait budget to timeout, which is the
+  # cost paid by exactly the pull requests that needed no changes.
   #
   # The state branch is anchored to `.commit == $sha` rather than the looser
   # `scope`, because a review state means something only for the commit it
