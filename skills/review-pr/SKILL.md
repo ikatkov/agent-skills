@@ -19,13 +19,17 @@ PR number the caller names).
 push; the fallback trigger is a `@coderabbitai review` comment. The verdict waits
 on CodeRabbit and on the ruleset-required status checks — nothing else.
 
-`reviewDecision` carries CodeRabbit's standing answer across cycles: it holds
+`reviewDecision` carries CodeRabbit's standing answer across cycles wherever the
+repository enables `reviews.request_changes_workflow`: it holds
 `CHANGES_REQUESTED` while any of its comments is open and turns `APPROVED` once
-they are resolved and the pre-merge checks pass. That behaviour comes from
-`reviews.request_changes_workflow`; `@coderabbitai configuration` on any pull
-request prints the resolved config with each key's source. Where the setting is
-off, the decision stays `null` and Section 6's per-cycle rules carry the verdict
-alone.
+they are resolved and the pre-merge checks pass.
+
+**This skill requires no particular repository configuration.** Read which case
+applies from the snapshot Section 3 already fetches, and change no setting to
+suit the skill: a `reviewDecision` of `APPROVED` or `CHANGES_REQUESTED` means the
+workflow is on and Section 6 gates on it. `null` with CodeRabbit reviews present
+means the workflow is off, its reviews land as `COMMENTED`, and Section 6's
+per-cycle rules carry the verdict alone.
 
 **Never post `@coderabbitai approve`.** It submits an approving review on demand,
 with an empty body, whatever the state of the code — so it forges the exact

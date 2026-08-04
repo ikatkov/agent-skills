@@ -42,6 +42,13 @@ review artifact.
   silence.
 - On a fork PR, CodeRabbit may be configured off entirely. Check whether it has
   ever commented on this repository before waiting out a second full budget.
+- A reviewer that answered the early cycles and then goes silent on a later one
+  may have hit `reviews.auto_review.auto_pause_after_reviewed_commits`, which
+  pauses automatic review after that many reviewed commits and defaults to 5 —
+  within reach of this skill's five-cycle cap when each cycle pushes a fix. The
+  tag path recovers it: post one `@coderabbitai review` and restart the waiter
+  with `--tagged-coderabbit`, because manual review survives the pause. Report
+  the silence in the verdict so the repository owner can set the key to 0.
 
 ## Snapshots and required checks
 
