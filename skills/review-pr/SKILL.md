@@ -24,12 +24,8 @@ repository enables `reviews.request_changes_workflow`: it holds
 `CHANGES_REQUESTED` while any of its comments is open and turns `APPROVED` once
 they are resolved and the pre-merge checks pass.
 
-**This skill requires no particular repository configuration.** Read which case
-applies from the snapshot Section 3 already fetches, and change no setting to
-suit the skill: a `reviewDecision` of `APPROVED` or `CHANGES_REQUESTED` means the
-workflow is on and Section 6 gates on it. `null` with CodeRabbit reviews present
-means the workflow is off, its reviews land as `COMMENTED`, and Section 6's
-per-cycle rules carry the verdict alone.
+Read which case applies from the snapshot Section 3 already fetches, and see
+**Repository expectations** below for what each costs the run.
 
 **Never post `@coderabbitai approve`.** It submits an approving review on demand,
 with an empty body, whatever the state of the code — so it forges the exact
@@ -39,6 +35,24 @@ posts.
 Human reviewers never gate the verdict, but their unresolved review threads still
 block `pass`: triage every unresolved thread in Section 4 regardless of who
 opened it.
+
+## Repository expectations
+
+This skill runs against whatever configuration a repository already has and
+changes none of it. Two CodeRabbit settings decide how well the loop runs, and
+both are read from evidence the run already produces. **Name every one that is
+missing in the verdict**, so the person reading it can decide whether to set it.
+A run that quietly absorbs the cost teaches nobody.
+
+| Setting | What it buys the loop | How this run detects it |
+|---|---|---|
+| `reviews.request_changes_workflow: true` | `reviewDecision` becomes CodeRabbit's standing answer, so convergence is read rather than inferred | `reviewDecision` is `APPROVED` or `CHANGES_REQUESTED`. `null` with CodeRabbit reviews present means it is off |
+| `reviews.auto_review.auto_pause_after_reviewed_commits: 0` | Automatic review survives a loop longer than five commits | The default is 5. A reviewer that answered early cycles and goes quiet on a later one has likely reached it |
+
+Neither is required. With the first off, Section 6's per-cycle rules carry the
+verdict alone and CodeRabbit's reviews land as `COMMENTED`. With the second at its
+default, the tag path in Section 2 recovers the paused reviewer. Both cost the run
+time it could avoid, which is what the verdict line reports.
 
 ## 0. Preflight: pick one transport, or stop
 
@@ -357,6 +371,8 @@ GITHUB_REVIEW_RESULT:
 - Unresolved actionable threads: <count>
 - Review decision: <APPROVED/CHANGES_REQUESTED/null; null where the
   request-changes workflow is off>
+- Repository configuration to set: <each setting from Repository expectations
+  this run found missing, with what it cost; or none>
 - Pending required checks: <list or none; include mergeStateStatus>
 - Ready-only deferred gates: <list or none>
 - Verdict: <pass/needs-changes>
