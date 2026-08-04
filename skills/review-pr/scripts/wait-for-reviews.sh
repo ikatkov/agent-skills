@@ -24,16 +24,24 @@ Options:
   --base BRANCH                 Base branch (default: main)
   --interval SECONDS            Poll interval (default: 50)
   --timeout SECONDS             Total wait budget (default: 900)
-  --tag-after SECONDS           Missing-bot fallback delay (default: 60)
+  --tag-after SECONDS           Missing-bot fallback delay (default: 480).
+                                Must sit above the repository's observed
+                                push-to-review latency: a tag posted inside
+                                that window interrupts the automatic review it
+                                was meant to provoke.
   --once                        Probe once without sleeping
   --tagged-coderabbit           CodeRabbit fallback tag was already posted
   --re-review-cycle             This wait follows a fix push for findings from
                                 an exact-HEAD review at the previous anchor.
-                                CodeRabbit reviews incrementally and never
-                                re-posts a review body for a fix-only push, so
-                                accept in-thread confirmations at the new HEAD
-                                plus zero unresolved CodeRabbit threads as the
-                                terminal state confirmed_no_new_findings.
+                                Automatic incremental review covers the new
+                                commit, so the wait is the whole mechanism; the
+                                flag only enables the needs_full_review
+                                escalation once the budget runs low.
+  --full-review-after SECONDS   Escalation delay on a re-review cycle
+                                (default: 600). A clean incremental review can
+                                emit no artifact at all, which is the one case
+                                a wait cannot end.
+  --forced-full-review          `@coderabbitai full review` was already posted
 EOF
 }
 
@@ -46,10 +54,12 @@ COMMIT_DATE=""
 BASE="main"
 INTERVAL=50
 TIMEOUT=900
-TAG_AFTER=60
+TAG_AFTER=480
+FULL_REVIEW_AFTER=600
 ONCE=0
 TAGGED_CODERABBIT=0
 RE_REVIEW=0
+FORCED_FULL_REVIEW=0
 
 while (($#)); do
   case "$1" in
@@ -63,9 +73,11 @@ while (($#)); do
     --interval) INTERVAL=${2:-}; shift 2 ;;
     --timeout) TIMEOUT=${2:-}; shift 2 ;;
     --tag-after) TAG_AFTER=${2:-}; shift 2 ;;
+    --full-review-after) FULL_REVIEW_AFTER=${2:-}; shift 2 ;;
     --once) ONCE=1; shift ;;
     --tagged-coderabbit) TAGGED_CODERABBIT=1; shift ;;
     --re-review-cycle) RE_REVIEW=1; shift ;;
+    --forced-full-review) FORCED_FULL_REVIEW=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -79,8 +91,8 @@ for required in OWNER REPO PR HEAD_SHA REVIEW_START COMMIT_DATE; do
   fi
 done
 
-if ! [[ $PR =~ ^[0-9]+$ && $INTERVAL =~ ^[1-9][0-9]*$ && $TIMEOUT =~ ^[1-9][0-9]*$ && $TAG_AFTER =~ ^[0-9]+$ ]]; then
-  printf 'PR, interval, timeout, and tag-after must be non-negative integers (positive except tag-after)\n' >&2
+if ! [[ $PR =~ ^[0-9]+$ && $INTERVAL =~ ^[1-9][0-9]*$ && $TIMEOUT =~ ^[1-9][0-9]*$ && $TAG_AFTER =~ ^[0-9]+$ && $FULL_REVIEW_AFTER =~ ^[0-9]+$ ]]; then
+  printf 'PR, interval, timeout, tag-after, and full-review-after must be non-negative integers (positive except the delays)\n' >&2
   exit 2
 fi
 
@@ -376,8 +388,9 @@ graphql_page() {
   printf '%s' "$body"
 }
 
-# Re-review cycles gate on unresolved CodeRabbit threads instead of a review
-# body CodeRabbit will never re-emit, so the waiter needs the thread state.
+# Reported, not gated on. Section 4 of the skill resolves threads itself, so a
+# zero count is an account of this run's own actions rather than evidence about
+# the review — but it is what tells a reader whether anything is still open.
 fetch_threads() {
   if [[ $GH_MODE == gh ]]; then
     fetch_json "$THREADS" gh api graphql --paginate -f query="$THREADS_QUERY" \
@@ -430,13 +443,20 @@ classify_reviews() {
   # approval invisible and grinds the whole wait budget to timeout, which is the
   # cost paid by exactly the pull requests that needed no changes.
   #
+  # The chatter filter covers every surface. CodeRabbit posts non-review prose
+  # inline as well as at review level — command acknowledgements, and a refusal
+  # to process comments authored by another bot. Any of those is a few dozen
+  # bytes long, can carry an older commit than HEAD, and lands within seconds of
+  # a push, so exempting the inline surface turns the whole wait into a no-op
+  # exactly when a fix commit needs reviewing.
+  #
   # The state branch is anchored to `.commit == $sha` rather than the looser
   # `scope`, because a review state means something only for the commit it
   # names. That keeps the exact-HEAD guarantee the whole skill rests on.
   local cr_substantive
   cr_substantive=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
-    def chatter: test("summarize by coderabbit\\.ai|review in progress|processing new changes|no new commits to review"; "i");
+    def chatter: test("summarize by coderabbit\\.ai|review in progress|processing new changes|no new commits to review|review finished|action performed|skipped: comment is from another github bot|auto-generated reply by coderabbit"; "i");
     def verdict_state: (.state // "") | ascii_upcase | . == "APPROVED" or . == "CHANGES_REQUESTED";
     any(.[];
       .login == "coderabbitai[bot]" and
@@ -444,7 +464,7 @@ classify_reviews() {
         (
           scope and
           ((.body // "") | length > 0) and
-          ((.surface == "inline") or (.surface == "review" and (((.body // "") | chatter) | not)))
+          (((.body // "") | chatter) | not)
         )
         or
         (.surface == "review" and .commit == $sha and verdict_state)
@@ -454,24 +474,6 @@ classify_reviews() {
   if [[ $cr_substantive == true ]]; then CR_STATUS="responded"
   elif [[ $cr_unavailable == true ]]; then CR_STATUS="unavailable"
   else CR_STATUS="in-progress"
-  fi
-
-  # On a fix-only push, CodeRabbit confirms in-thread and answers a forced
-  # re-review with "Review finished"; it never re-posts a review body for a
-  # commit it already processed incrementally. Treat that as terminal instead
-  # of grinding the full wait budget to timeout. Cycle-1 strictness is kept:
-  # this branch only runs with --re-review-cycle.
-  if [[ $RE_REVIEW -eq 1 && $CR_STATUS == in-progress ]]; then
-    local cr_at_head
-    cr_at_head=$(snapshot_query '
-      def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
-      any(.[]; .login == "coderabbitai[bot]" and (
-        (.surface == "review" and .commit == $sha) or
-        (scope and ((.body // "") | test("no new commits to review|review finished"; "i")))
-      ))')
-    if [[ $cr_at_head == true && $UNRESOLVED_CR_THREADS == 0 ]]; then
-      CR_STATUS="confirmed_no_new_findings"
-    fi
   fi
 }
 
@@ -550,15 +552,25 @@ while :; do
     exit 0
   fi
 
+  # Cycle 1 only. A re-review cycle escalates through needs_full_review instead,
+  # because `@coderabbitai review` is incremental and returns an acknowledgement
+  # for a commit automatic review has already accounted for.
   elapsed=$(( $(date +%s) - STARTED_EPOCH ))
-  if ((elapsed >= TAG_AFTER)) && ((TAGGED_CODERABBIT == 0)) \
+  if ((RE_REVIEW == 0)) && ((elapsed >= TAG_AFTER)) && ((TAGGED_CODERABBIT == 0)) \
     && [[ $CR_STATUS == in-progress && $CR_SEEN == false ]]; then
     emit "needs_tag" "tag CodeRabbit once, then restart the waiter with --tagged-coderabbit" '["coderabbit"]'
     exit 0
   fi
 
-  if [[ $CR_STATUS == confirmed_no_new_findings ]] && [[ $CHECKS_STATUS == ready ]]; then
-    emit "confirmed_no_new_findings" "CodeRabbit confirmed the pushed fixes at the new HEAD with zero unresolved CodeRabbit threads; it will not re-post a review body for an already-reviewed commit" '[]'
+  # Automatic incremental review covers every push, so waiting is the whole
+  # mechanism on a re-review cycle. The one case it cannot end is a clean
+  # incremental review, which can emit no artifact at all — there is nothing to
+  # wait for and nothing to conclude from. `full review` is the only command
+  # that produces an artifact on demand; `review` is itself incremental and
+  # no-ops while automatic review is un-paused.
+  if ((RE_REVIEW)) && ((elapsed >= FULL_REVIEW_AFTER)) && ((FORCED_FULL_REVIEW == 0)) \
+    && [[ $CR_STATUS == in-progress ]]; then
+    emit "needs_full_review" "post one @coderabbitai full review, then restart the waiter with --forced-full-review" '["coderabbit"]'
     exit 0
   fi
 

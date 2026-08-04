@@ -6,23 +6,31 @@ review artifact.
 
 ## CodeRabbit
 
-- On the **first review cycle**, a walkthrough (`summarize by coderabbit.ai`),
-  `review in progress`, or `No new commits to review` is engagement, not a
-  substantive review.
-- On a **re-review cycle** (fixes pushed for findings CodeRabbit already
-  reviewed), that same line means the opposite: CodeRabbit reviews
-  incrementally and never re-posts a review body for a commit it already
-  processed. It verifies the pushed fixes in-thread — confirmation replies
-  whose wrapper reviews carry the new HEAD's `commit_id`, often auto-resolving
-  the threads — and answers a forced `@coderabbitai review` with "Review
-  finished". Those confirmations plus zero unresolved CodeRabbit threads are
-  completion, not engagement; waiting longer cannot produce a review body it
-  will never emit. Run the waiter with `--re-review-cycle` so it stops on
-  `confirmed_no_new_findings` instead of grinding to `timeout`.
-- After a fix push CodeRabbit may also submit an `APPROVED` review at the new
-  HEAD with an **empty body** (alongside its thread confirmations). That is its
-  terminal verdict for the cycle — count it as the exact-HEAD response even
-  though a body-length test reads it as empty.
+- A walkthrough (`summarize by coderabbit.ai`), `review in progress`, or
+  `No new commits to review` is engagement, not a substantive review. This holds
+  on every cycle, first or later.
+- **A review takes minutes.** `auto_incremental_review` defaults to on, so
+  automatic review picks up each push without being asked; measured latency on
+  one repository ran 100–440 seconds from push to the review artifact, on fix
+  commits as well as first ones. Every delay in the waiter must sit above that
+  band. A command posted inside the window interrupts the review it was meant to
+  provoke, and what comes back is an acknowledgement mistakable for a verdict.
+- **`@coderabbitai review` is itself incremental** and no-ops while automatic
+  review is un-paused — it answers `Review finished` within seconds, over a note
+  saying it "does not re-review already reviewed commits" and applies "only when
+  automatic reviews are paused". `@coderabbitai full review` is the command that
+  reassesses from scratch and is the only one that produces an artifact on
+  demand. Reach for it only once the wait has genuinely run dry.
+- **Silence can be the whole answer.** A clean incremental review sometimes emits
+  no artifact at all — no review, no inline comment, no state. There is then
+  nothing to wait for and nothing to conclude, which is what the
+  `needs_full_review` escalation exists for. If that still yields nothing, the
+  commit went unreviewed and the verdict says so.
+- An **empty-body `COMMENTED` review** is the wrapper CodeRabbit puts around a
+  thread reply. It marks a conversation, not a verdict, and it can appear within
+  seconds of a push. An empty-body **`APPROVED`** at the exact HEAD is the
+  opposite — a terminal verdict, and the shape of every clean review — so count
+  the state, not the body length.
 - A green CodeRabbit check without a review body or inline finding is not a
   substantive review artifact.
 - Scope inline comments by their stable `original_commit_id`, not the movable
@@ -42,6 +50,33 @@ review artifact.
   silence.
 - On a fork PR, CodeRabbit may be configured off entirely. Check whether it has
   ever commented on this repository before waiting out a second full budget.
+
+### CodeRabbit and bot identities
+
+- **CodeRabbit does not process conversational comments from GitHub `Bot`
+  actors.** It answers `Skipped: comment is from another GitHub bot` within
+  seconds and reads nothing. **No setting changes this** — not in
+  `.coderabbit.yaml`, the repository or organization UI, or the published API.
+  `ignore_usernames` is exclusion-only and applies to the pull request author;
+  `chat.allow_non_org_members` and `chat.auto_reply` do not govern actor type;
+  `review_status: false` only hides status messages. Do not go looking again.
+- **Commands are exempt.** `@coderabbitai review` and `@coderabbitai full review`
+  are honoured from a bot account; only conversation is dropped. That asymmetry
+  is the escape hatch, and it is the escalation rather than the main path.
+- What a bot identity costs: CodeRabbit never reads the fix rationale, never
+  answers a declined finding, and never resolves the thread itself — so the
+  approval that follows its own resolution may never arrive. Report it under
+  Repository expectations rather than working around it silently.
+- The remedy is a machine-user PAT for the commenting calls, which makes the
+  actor a `User`. An `actions/create-github-app-token` installation token does
+  **not**: it still authenticates as the App's bot. Weigh the cost first — PAT
+  events re-trigger workflows where `GITHUB_TOKEN` events do not, so the switch
+  needs actor filters and an iteration ceiling.
+- A separate **pull-request-author** gate exists and reads
+  `Review skipped. Bot user detected. To trigger a single review, invoke the
+  @coderabbitai review command.` That is a different problem with a different
+  remedy, and whether automatic review resumes for later pushes after that one
+  forced review is undocumented.
 - A reviewer that answered the early cycles and then goes silent on a later one
   may have hit `reviews.auto_review.auto_pause_after_reviewed_commits`, which
   pauses automatic review after that many reviewed commits and defaults to 5 —
