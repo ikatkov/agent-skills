@@ -19,6 +19,19 @@ PR number the caller names).
 push; the fallback trigger is a `@coderabbitai review` comment. The verdict waits
 on CodeRabbit and on the ruleset-required status checks — nothing else.
 
+`reviewDecision` carries CodeRabbit's standing answer across cycles: it holds
+`CHANGES_REQUESTED` while any of its comments is open and turns `APPROVED` once
+they are resolved and the pre-merge checks pass. That behaviour comes from
+`reviews.request_changes_workflow`; `@coderabbitai configuration` on any pull
+request prints the resolved config with each key's source. Where the setting is
+off, the decision stays `null` and Section 6's per-cycle rules carry the verdict
+alone.
+
+**Never post `@coderabbitai approve`.** It submits an approving review on demand,
+with an empty body, whatever the state of the code — so it forges the exact
+signal this skill waits on. `@coderabbitai review` is the only command this skill
+posts.
+
 Human reviewers never gate the verdict, but their unresolved review threads still
 block `pass`: triage every unresolved thread in Section 4 regardless of who
 opened it.
@@ -196,13 +209,15 @@ Also fetch the base ruleset and
 A failed snapshot or ruleset lookup fails closed; never interpret an empty
 payload as clean.
 
-Read bodies rather than trusting check success. On the first cycle, a CodeRabbit
-walkthrough, a `review in progress` note, or a green CodeRabbit check with no
-review body and no inline finding is engagement, not a review. A review whose
-state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA` is a verdict, whatever
-its body length. On a re-review
-cycle, judge against the acceptance rule in Section 6 instead — in-thread
-confirmations at the new HEAD are the review artifact there.
+Read bodies rather than trusting check success. CodeRabbit's own status check
+reports that it ran, and `reviews.fail_commit_status` defaults to false, so that
+check stays green with findings open — it carries no verdict at any point. On the
+first cycle, a CodeRabbit walkthrough, a `review in progress` note, or a green
+CodeRabbit check with no review body and no inline finding is engagement, not a
+review. A review whose state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA`
+is a verdict, whatever its body length. On a re-review cycle, judge against the
+acceptance rule in Section 6 instead — in-thread confirmations at the new HEAD
+are the review artifact there.
 
 ## 4. Triage against the scope contract, then fix
 
@@ -290,6 +305,13 @@ Push fixes, re-anchor the new HEAD, and run another deterministic wait with
 `--re-review-cycle` set (Section 2). Cap at five cycles; each cycle must make a
 concrete fix. Stop on repeated or non-actionable churn.
 
+`confirmed_no_new_findings` fires on zero unresolved CodeRabbit threads, and the
+approval trails the resolution that triggers it — so the wait can return while
+`reviewDecision` still reads `CHANGES_REQUESTED` from the review you just
+answered. With every finding fixed and the decision still standing, let it settle
+through the same turn-free mechanism as Section 2, and judge afterwards. An LLM
+polling loop is the wrong tool here as everywhere else in this skill.
+
 ## 5a. Re-arm on only-waiting, don't dead-end a pending PR
 
 Before returning `needs-changes`, check whether the *only* blocker is external
@@ -329,6 +351,8 @@ GITHUB_REVIEW_RESULT:
 - Declined as out of scope: <one line each: finding, thread URL, reason; or none>
 - Files added to the PR by review fixes: <list or none>
 - Unresolved actionable threads: <count>
+- Review decision: <APPROVED/CHANGES_REQUESTED/null; null where the
+  request-changes workflow is off>
 - Pending required checks: <list or none; include mergeStateStatus>
 - Ready-only deferred gates: <list or none>
 - Verdict: <pass/needs-changes>
@@ -337,8 +361,16 @@ GITHUB_REVIEW_RESULT:
 
 Return `pass` only when CodeRabbit delivered an exact-HEAD response,
 every in-scope finding is fixed, every out-of-scope one is answered and listed in
-the verdict, all threads are resolved, and every required check is
-`SUCCESS`/`SKIPPED`. A PR that ships exactly what its description promised and
+the verdict, all threads are resolved, `reviewDecision` reads `APPROVED` wherever
+the request-changes workflow is enabled, and every required check is
+`SUCCESS`/`SKIPPED`.
+
+`reviewDecision` is necessary and never sufficient. Auto-approval fires once
+CodeRabbit's comments are resolved, and Section 4 puts resolution in this skill's
+own hands — so an agent that resolves a thread it did not fix manufactures its
+own `APPROVED`, and the flag confirms only that CodeRabbit agrees with what the
+skill already did. The substantive conditions above are what make the resolution
+honest. Read the decision as the last check on a case built elsewhere. A PR that ships exactly what its description promised and
 nothing more is the goal; declining scope creep is a `pass`, not a
 `needs-changes`.
 
