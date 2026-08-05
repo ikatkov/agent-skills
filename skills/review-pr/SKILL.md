@@ -450,9 +450,9 @@ concluding a review is silent — a clean review usually lives there and nowhere
 else. Where even that is absent, `needs_full_review` exists: one
 `@coderabbitai full review`, and if that still yields no artifact bound to
 `HEAD_SHA`, the verdict is `needs-changes` naming the commit as unreviewed.
-Note what that escalation cannot do — on `ikatkov/qrz-bot#79` it answered
-`Action performed / Full review finished` in four seconds, because the review it
-was asked to redo had already run and already been reported in the walkthrough.
+Note what that escalation cannot do: asked to redo a review that has already run
+and already been reported in the walkthrough, it answers
+`Action performed / Full review finished` within seconds and produces nothing.
 
 `pass` means reviewed and ready to merge — nothing about whether the change
 merges, builds, deploys, or works live. Never merge from this skill; hand back to

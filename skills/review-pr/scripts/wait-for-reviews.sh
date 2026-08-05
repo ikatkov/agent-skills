@@ -468,9 +468,9 @@ classify_reviews() {
   # comment is mutable — CodeRabbit rewrites it in place on every review — so the
   # anchor is the *end* of the range it reports. Matching the SHA anywhere in the
   # body would accept a comment whose range merely *starts* at this commit, which
-  # is what an incremental review of the commit after it reads like: the range on
-  # qrz-bot#61 read "between f9db6de and 706ff9a" while the loop was anchored at
-  # f9db6de. That is a review of the next commit, not this one.
+  # is what an incremental review of the commit after it reads like: a range
+  # reading "between A and B" while the loop is anchored at A reports a review of
+  # B, not of A.
   #
   # A body carrying "Review limit reached" or "Review failed" never reaches here:
   # it does not carry the verdict sentence, and the rate-limit wording lands in
