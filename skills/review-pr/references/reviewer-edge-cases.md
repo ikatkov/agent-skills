@@ -16,6 +16,11 @@ review artifact.
   one repository: 10 carried that sentence, and in all 10 it sat in the same
   comment as the reviewed range, whose end matched the pull request head in
   every spot check. Accepted only with both halves present on one comment.
+  This placement is CodeRabbit's documented behaviour, not an accident to be
+  tidied away later — see "Why did CodeRabbit not leave any review comments on
+  my pull request" in their knowledge base, which states the confirmation
+  appears below the Walkthrough section. There is no documented API, webhook or
+  check-run equivalent; reading the comment is the supported route.
 - The walkthrough is **mutable** — rewritten in place on each review — so anchor
   on the *end* of `between <base> and <head>`, never on the SHA appearing
   anywhere in the body. A range reading `between A and B` while the loop is
