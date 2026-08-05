@@ -200,6 +200,7 @@ CR_SEEN=false
 PENDING_CHECKS='[]'
 FAILED_CHECKS='[]'
 UNRESOLVED_CR_THREADS=null
+CR_RETRY_AFTER=null
 
 emit() {
   local state=$1
@@ -217,6 +218,7 @@ emit() {
     --argjson pending_checks "$PENDING_CHECKS" \
     --argjson failed_checks "$FAILED_CHECKS" \
     --argjson unresolved_cr_threads "$UNRESOLVED_CR_THREADS" \
+    --argjson coderabbit_retry_after "$CR_RETRY_AFTER" \
     '{
       state: $state,
       reason: $reason,
@@ -228,7 +230,8 @@ emit() {
       needs_tag: $needs_tag,
       pending_checks: $pending_checks,
       failed_checks: $failed_checks,
-      unresolved_coderabbit_threads: $unresolved_cr_threads
+      unresolved_coderabbit_threads: $unresolved_cr_threads,
+      coderabbit_retry_after: $coderabbit_retry_after
     }'
 }
 
@@ -496,8 +499,34 @@ classify_reviews() {
       )
     )')
 
+  # The walkthrough reports two non-verdicts for this exact commit as well, and
+  # both are terminal: waiting past either only spends the budget. "Review
+  # failed" carries its own `failure by coderabbit.ai` marker and states the
+  # cause below it, most often a pull request closed under the reviewer. The
+  # rate-limit block names the account whose per-developer quota ran out, which
+  # is worth reading — it is the identity that pushed, so a loop running as a bot
+  # exhausts a different allowance than the human who owns the repository.
+  local cr_failed
+  cr_failed=$(snapshot_query '
+    def failed_at_head: test("failure by coderabbit\\.ai|##\\s*review failed"; "i") and test("between [0-9a-f]{40} and " + $sha; "i");
+    any(.[]; .login == "coderabbitai[bot]" and ((.body // "") | failed_at_head))')
+
+  # How long the limit has left to run, straight from the notice. Observed
+  # values ranged from six seconds to forty-two minutes, so a caller that
+  # re-arms on a fixed interval either wastes most of it or wakes too early;
+  # this hands over the number CodeRabbit already published.
+  CR_RETRY_AFTER=$(snapshot_query '
+    [ .[]
+      | select(.login == "coderabbitai[bot]")
+      | (.body // "")
+      | capture("next review available in:?\\**\\s*\\**(?<v>[0-9]+)\\s*(?<u>second|minute|hour)"; "i")
+      | (.v | tonumber) * (if .u == "hour" then 3600 elif .u == "minute" then 60 else 1 end)
+    ] | first // null')
+  [[ -n $CR_RETRY_AFTER ]] || CR_RETRY_AFTER=null
+
   if [[ $cr_substantive == true ]]; then CR_STATUS="responded"
   elif [[ $cr_unavailable == true ]]; then CR_STATUS="unavailable"
+  elif [[ $cr_failed == true ]]; then CR_STATUS="failed"
   else CR_STATUS="in-progress"
   fi
 }
@@ -599,7 +628,12 @@ while :; do
     exit 0
   fi
 
-  if [[ $CR_STATUS == responded || $CR_STATUS == unavailable ]] && [[ $CHECKS_STATUS == ready ]]; then
+  # `failed` joins these because a failed review is as terminal as a delivered
+  # one: CodeRabbit has stopped, and no further waiting changes that. It is not
+  # a pass — Section 6 reports the commit as unreviewed — but spending the rest
+  # of the budget first buys nothing.
+  if [[ $CR_STATUS == responded || $CR_STATUS == unavailable || $CR_STATUS == failed ]] \
+    && [[ $CHECKS_STATUS == ready ]]; then
     emit "ready" "the CodeRabbit wait and required status checks are terminal" '[]'
     exit 0
   fi

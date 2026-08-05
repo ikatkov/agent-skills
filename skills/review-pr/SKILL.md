@@ -57,6 +57,16 @@ missing, every review thread is a monologue and some cycles end `needs-changes` 
 a commit nothing reviewed. Each costs the run time or certainty it could have had,
 which is what the verdict line reports.
 
+**Check one thing before enabling the first.** Where GitHub's Code Review Limits
+are on, only accounts with explicitly granted read access or higher may submit a
+review that approves or requests changes — ordinary comments still land. Turning
+`request_changes_workflow` on under that restriction does not improve the signal,
+it stops CodeRabbit posting review comments at all, with `Failed to post review
+comments`. Look at **Settings → Access → Moderation options → Code review
+limits** first, and either turn off "Limit to users explicitly granted read or
+higher access" or grant CodeRabbit read access. Recommending the setting without
+this check trades a working reviewer for a cleaner status field.
+
 The third is not a CodeRabbit setting and cannot be configured on their side — see
 [reviewer-edge-cases.md](references/reviewer-edge-cases.md). The remedy is a
 machine-user PAT for the commenting calls. An `actions/create-github-app-token`
@@ -355,10 +365,22 @@ bug to report, not a licence to hand-roll a `while` loop around `gh api`.
 ## 5a. Re-arm on only-waiting, don't dead-end a pending PR
 
 Before returning `needs-changes`, check whether the *only* blocker is external
-progress — CodeRabbit still in-progress, or a required check still
-pending-not-failed — with zero actionable findings/threads, zero failed checks,
-and zero pending local fixes. Any actionable finding or failed check returns
-`needs-changes` immediately; never mask a real problem behind "still waiting".
+progress — CodeRabbit still in-progress, a rate limit with time left to run, or a
+required check still pending-not-failed — with zero actionable findings/threads,
+zero failed checks, and zero pending local fixes. Any actionable finding or
+failed check returns `needs-changes` immediately; never mask a real problem
+behind "still waiting".
+
+A rate limit belongs here because it expires on its own. The quota is
+per-developer and charged to whichever identity pushed, so a loop running as a
+bot spends a different allowance than the repository owner. When the helper
+reports `coderabbit: unavailable`, `coderabbit_retry_after` carries the seconds
+CodeRabbit itself published — **re-arm on that number, not on the default
+interval.** Observed values run from six seconds to forty-two minutes, so a fixed
+delay either idles through most of the window or wakes into the same limit.
+`failed` is the opposite case and never re-arms: CodeRabbit stopped, and the
+cause it prints (most often a pull request closed under the review) does not
+clear by waiting.
 
 On that only-waiting state, re-arm instead of stopping, so the operator never
 re-runs the helper by hand:
@@ -385,7 +407,8 @@ re-runs the helper by hand:
 ```text
 GITHUB_REVIEW_RESULT:
 - PR: <url or number>
-- CodeRabbit: <responded/in-progress/unavailable/failed; reason>
+- CodeRabbit: <responded/in-progress/unavailable/failed; reason. On unavailable,
+  name the account whose quota ran out and the published retry delay>
 - Review cycles: <count>
 - Issues found / fixed in scope / declined out of scope: <n> / <n> / <n>
 - Declined as out of scope: <one line each: finding, thread URL, reason; or none>
