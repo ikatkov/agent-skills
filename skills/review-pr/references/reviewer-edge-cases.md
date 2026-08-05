@@ -25,10 +25,25 @@ review artifact.
   on the *end* of `between <base> and <head>`, never on the SHA appearing
   anywhere in the body. A range reading `between A and B` while the loop is
   anchored at `A` reports a review of `B`, not of `A`.
-- The same comment also carries `Review limit reached` and `Review failed`
-  (the latter on a closed pull request). Neither carries the verdict sentence,
-  so neither is accepted; the rate-limit wording lands in the unavailable path
-  below via its own `rate limit` text.
+- The same comment carries the two non-verdicts as well, and **both are
+  terminal** — waiting past either only spends the budget:
+  - `Review failed`, with its own `failure by coderabbit.ai` marker and the
+    cause below it (most often "The pull request is closed"). Classified
+    `failed`, which ends the wait but never passes: the commit is unreviewed.
+  - `Review limit reached`, carrying `Next review available in: <n> <unit>`.
+    Classified `unavailable`, and the delay is parsed into
+    `coderabbit_retry_after` (seconds). Observed 6 seconds, 15, 18, 33 and 42
+    minutes across five pull requests — re-arm on the published number, never a
+    fixed interval.
+- The rate-limit notice names the account whose quota ran out, and the quota is
+  **per developer**: observed charged to both the repository owner and to
+  `github-actions[bot]`, depending on which identity pushed. A loop running as a
+  bot therefore exhausts a different allowance than the human. Pro is 5 PR
+  reviews an hour and Pro+ is 10, on a rolling window, with additional spacing
+  above the 95th percentile of recent activity — so a five-cycle loop can consume
+  half a Pro+ hour by itself, and its later cycles are the ones that get spaced
+  out. `@coderabbitai rate limit` reports the remaining allowance without
+  consuming a review, which is the cheap way for a human to check.
 - **A review takes minutes.** `auto_incremental_review` defaults to on, so
   automatic review picks up each push without being asked; measured latency on
   one repository ran 100–440 seconds from push to the review artifact, on fix
