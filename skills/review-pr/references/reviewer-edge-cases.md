@@ -6,9 +6,24 @@ review artifact.
 
 ## CodeRabbit
 
-- A walkthrough (`summarize by coderabbit.ai`), `review in progress`, or
-  `No new commits to review` is engagement, not a substantive review. This holds
-  on every cycle, first or later.
+- `review in progress` or `No new commits to review` is engagement, not a
+  substantive review. This holds on every cycle, first or later.
+- **The walkthrough comment is where a clean review lives.** It carries the
+  `summarize by coderabbit.ai` marker, so the chatter filter used to discard it
+  wholesale — but when a review finds nothing, CodeRabbit posts no review object
+  and no inline comment, and edits `No actionable comments were generated in the
+  recent review` into that comment instead. Measured across 30 `ikatkov/qrz-bot`
+  pull requests: 10 carried that sentence, and in all 10 it sat in the same
+  comment as the reviewed range, whose end matched the pull request head in
+  14/14 spot checks. Accepted only with both halves present on one comment.
+- The walkthrough is **mutable** — rewritten in place on each review — so anchor
+  on the *end* of `between <base> and <head>`, never on the SHA appearing
+  anywhere in the body. On #61 the range read `between f9db6de and 706ff9a`
+  while a loop anchored at `f9db6de`: that is a review of the next commit.
+- The same comment also carries `Review limit reached` and `Review failed`
+  (the latter on a closed pull request). Neither carries the verdict sentence,
+  so neither is accepted; the rate-limit wording lands in the unavailable path
+  below via its own `rate limit` text.
 - **A review takes minutes.** `auto_incremental_review` defaults to on, so
   automatic review picks up each push without being asked; measured latency on
   one repository ran 100–440 seconds from push to the review artifact, on fix
@@ -21,11 +36,17 @@ review artifact.
   automatic reviews are paused". `@coderabbitai full review` is the command that
   reassesses from scratch and is the only one that produces an artifact on
   demand. Reach for it only once the wait has genuinely run dry.
-- **Silence can be the whole answer.** A clean incremental review sometimes emits
-  no artifact at all — no review, no inline comment, no state. There is then
-  nothing to wait for and nothing to conclude, which is what the
+- **Silence can be the whole answer.** A clean incremental review emits no
+  review, no inline comment and no state — check the walkthrough comment above
+  before calling it silent, because that is where the verdict usually is. Where
+  even that is missing there is nothing to wait for, which is what the
   `needs_full_review` escalation exists for. If that still yields nothing, the
   commit went unreviewed and the verdict says so.
+- **The full-review escalation cannot conjure a second verdict.** On #79 it
+  returned `Action performed / Full review finished` in four seconds: the review
+  had already run and already been reported in the walkthrough. Escalating past a
+  walkthrough that already answers for `HEAD_SHA` costs a full budget and yields
+  an acknowledgement.
 - An **empty-body `COMMENTED` review** is the wrapper CodeRabbit puts around a
   thread reply. It marks a conversation, not a verdict, and it can appear within
   seconds of a push. An empty-body **`APPROVED`** at the exact HEAD is the
