@@ -453,11 +453,34 @@ classify_reviews() {
   # The state branch is anchored to `.commit == $sha` rather than the looser
   # `scope`, because a review state means something only for the commit it
   # names. That keeps the exact-HEAD guarantee the whole skill rests on.
+  #
+  # The third branch reads the walkthrough comment, which the chatter filter
+  # otherwise discards wholesale for carrying the `summarize by coderabbit.ai`
+  # marker. A clean review can produce no review object and no inline comment at
+  # all — its entire verdict is the sentence "No actionable comments were
+  # generated in the recent review" edited into that one comment. Discarding it
+  # spends the full budget, escalates a full review that answers with an
+  # acknowledgement, and reports a reviewed commit as unreviewed, on exactly the
+  # pull requests that had nothing wrong with them.
+  #
+  # Both halves are required and both are checked on the same comment. The
+  # verdict sentence alone says nothing about which commit earned it, and the
+  # comment is mutable — CodeRabbit rewrites it in place on every review — so the
+  # anchor is the *end* of the range it reports. Matching the SHA anywhere in the
+  # body would accept a comment whose range merely *starts* at this commit, which
+  # is what an incremental review of the commit after it reads like: a range
+  # reading "between A and B" while the loop is anchored at A reports a review of
+  # B, not of A.
+  #
+  # A body carrying "Review limit reached" or "Review failed" never reaches here:
+  # it does not carry the verdict sentence, and the rate-limit wording lands in
+  # cr_unavailable below.
   local cr_substantive
   cr_substantive=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
     def chatter: test("summarize by coderabbit\\.ai|review in progress|processing new changes|no new commits to review|review finished|action performed|skipped: comment is from another github bot|auto-generated reply by coderabbit"; "i");
     def verdict_state: (.state // "") | ascii_upcase | . == "APPROVED" or . == "CHANGES_REQUESTED";
+    def clean_at_head: test("no actionable comments were generated"; "i") and test("between [0-9a-f]{40} and " + $sha; "i");
     any(.[];
       .login == "coderabbitai[bot]" and
       (
@@ -468,6 +491,8 @@ classify_reviews() {
         )
         or
         (.surface == "review" and .commit == $sha and verdict_state)
+        or
+        ((.body // "") | clean_at_head)
       )
     )')
 
