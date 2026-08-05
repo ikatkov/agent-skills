@@ -37,10 +37,12 @@ Options:
                                 commit, so the wait is the whole mechanism; the
                                 flag only enables the needs_full_review
                                 escalation once the budget runs low.
-  --full-review-after SECONDS   Escalation delay on a re-review cycle
-                                (default: 600). A clean incremental review can
-                                emit no artifact at all, which is the one case
-                                a wait cannot end.
+  --full-review-after SECONDS   Escalation delay on a re-review cycle, and on
+                                any cycle whose CodeRabbit rate-limit window has
+                                run out (default: 600). A clean incremental
+                                review can emit no artifact at all, and a
+                                refused request is never retried on its own;
+                                neither case ends a wait.
   --forced-full-review          `@coderabbitai full review` was already posted
 EOF
 }
@@ -201,6 +203,7 @@ PENDING_CHECKS='[]'
 FAILED_CHECKS='[]'
 UNRESOLVED_CR_THREADS=null
 CR_RETRY_AFTER=null
+CR_LIMIT=none
 
 emit() {
   local state=$1
@@ -430,15 +433,63 @@ snapshot_query() {
 }
 
 classify_reviews() {
-  local unavailable_regex='out[ -]?of[ -]?(plan[ -]?)?quota|rate[ -]?limit|temporar(y|ily) unavailable|unable to review'
-
   CR_SEEN=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
     any(.[]; .login == "coderabbitai[bot]" and scope)')
-  local cr_unavailable
-  cr_unavailable=$(snapshot_query "
-    def scope: (.commit == \$sha) or ((.ts // \"\") >= \$review_start) or ((.ts // \"\") >= \$commit_date) or ((.body // \"\") | contains(\$sha) or contains(\$short));
-    any(.[]; .login == \"coderabbitai[bot]\" and scope and ((.body // \"\") | test(\"$unavailable_regex\"; \"i\")))")
+
+  # What CodeRabbit says when *it* is refusing — which is not the same as any
+  # comment of its that mentions a quota. CodeRabbit describes every diff in its
+  # own words, so a pull request about rate limits earns a walkthrough containing
+  # "rate limit", and reading that as a refusal reports the reviewer unavailable
+  # on its own summary of the change, from the first cycle, with no quota
+  # anywhere. Three narrowings, each onto a notice CodeRabbit actually publishes:
+  #
+  #   - the wording is its own headings and generated sentences — "Review rate
+  #     limited", "Review limit reached", "your next included review will be
+  #     available in 28 minutes" — not the free-form "rate limit" it may write
+  #     about anything;
+  #   - the looser refusals are read on every surface except the walkthrough,
+  #     the one comment whose body is by definition a description of the diff;
+  #   - and a body that also reports a review in progress, or one that found
+  #     nothing, is reporting work rather than declining it.
+  #
+  # A notice must also still be live, because it never leaves the snapshot on its
+  # own: scope admits anything timestamped at or after the head commit, and a
+  # notice is by construction newer, so only a new commit clears one. Left
+  # unbounded it ends every later wait within seconds — including the waits that
+  # follow the window reopening, which are the ones the caller re-armed for.
+  # Live means CodeRabbit has said nothing since it, and the window it published
+  # has not run out. A notice past either is `spent`, which escalates below
+  # rather than ending the wait.
+  CR_LIMIT=$(snapshot_query '
+    def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
+    def walkthrough: test("summarize by coderabbit\\.ai"; "i");
+    def working: test("review in progress|no actionable comments were generated"; "i");
+    def notice:
+      (
+        test("review rate limited|rate limit exceeded|review limit reached"; "i")
+        or test("(next|another)( included)? review( will be)? available in"; "i")
+        or (
+          test("out[ -]?of[ -]?(plan[ -]?)?quota|temporar(y|ily) unavailable|unable to review"; "i")
+          and (walkthrough | not)
+        )
+      ) and (working | not);
+    def window:
+      (
+        capture("(?:next|another)(?: included)? review(?: will be)? available in:?\\**\\s*\\**(?<v>[0-9]+)\\s*(?<u>second|minute|hour)"; "i")
+        | (.v | tonumber) * (if (.u | ascii_downcase) == "hour" then 3600 elif (.u | ascii_downcase) == "minute" then 60 else 1 end)
+      ) // null;
+    [ .[] | select(.login == "coderabbitai[bot]") ] as $cr
+    | ([ $cr[] | .ts // "" ] | max // "") as $newest
+    | [ $cr[]
+        | select(scope and ((.body // "") | notice) and ((.ts // "") >= $newest))
+        | {ts: (.ts // ""), window: ((.body // "") | window)}
+      ] as $notices
+    | if ($notices | length) == 0 then "none"
+      elif any($notices[]; .window == null or .ts == "" or (((.ts | fromdateiso8601) + .window) > now)) then "live"
+      else "spent"
+      end')
+  [[ -n $CR_LIMIT ]] || CR_LIMIT=none
   # A verdict counts two ways. Prose — an inline finding, or a review body that
   # is more than CodeRabbit's own chatter. And a *state* on this exact commit:
   # CodeRabbit posts APPROVED with an empty body when it has nothing to say,
@@ -511,21 +562,33 @@ classify_reviews() {
     def failed_at_head: test("failure by coderabbit\\.ai|##\\s*review failed"; "i") and test("between [0-9a-f]{40} and " + $sha; "i");
     any(.[]; .login == "coderabbitai[bot]" and ((.body // "") | failed_at_head))')
 
-  # How long the limit has left to run, straight from the notice. Observed
-  # values ranged from six seconds to forty-two minutes, so a caller that
-  # re-arms on a fixed interval either wastes most of it or wakes too early;
-  # this hands over the number CodeRabbit already published.
+  # How long the limit has left to run, counted from the notice rather than
+  # copied off it. Observed windows ranged from six seconds to forty-two
+  # minutes, so a caller that re-arms on a fixed interval either wastes most of
+  # one or wakes into the same limit — and a wait can return a quarter of an hour
+  # after the notice was posted, which is enough of a forty-two-minute window to
+  # matter. Both wordings are read: the walkthrough's `Next review available in:
+  # <n> <unit>` and the command reply's `Your next included review will be
+  # available in <n> minutes`, whose "included" the narrower pattern missed
+  # entirely, handing back null for the one notice a caller most needs to re-arm
+  # on.
   CR_RETRY_AFTER=$(snapshot_query '
+    def window:
+      (
+        capture("(?:next|another)(?: included)? review(?: will be)? available in:?\\**\\s*\\**(?<v>[0-9]+)\\s*(?<u>second|minute|hour)"; "i")
+        | (.v | tonumber) * (if (.u | ascii_downcase) == "hour" then 3600 elif (.u | ascii_downcase) == "minute" then 60 else 1 end)
+      ) // null;
     [ .[]
       | select(.login == "coderabbitai[bot]")
-      | (.body // "")
-      | capture("next review available in:?\\**\\s*\\**(?<v>[0-9]+)\\s*(?<u>second|minute|hour)"; "i")
-      | (.v | tonumber) * (if .u == "hour" then 3600 elif .u == "minute" then 60 else 1 end)
-    ] | first // null')
+      | {ts: (.ts // ""), window: ((.body // "") | window)}
+      | select(.window != null)
+      | if .ts == "" then .window else (((.ts | fromdateiso8601) + .window) - now) end
+      | if . < 0 then 0 else floor end
+    ] | last // null')
   [[ -n $CR_RETRY_AFTER ]] || CR_RETRY_AFTER=null
 
   if [[ $cr_substantive == true ]]; then CR_STATUS="responded"
-  elif [[ $cr_unavailable == true ]]; then CR_STATUS="unavailable"
+  elif [[ $CR_LIMIT == live ]]; then CR_STATUS="unavailable"
   elif [[ $cr_failed == true ]]; then CR_STATUS="failed"
   else CR_STATUS="in-progress"
   fi
@@ -622,7 +685,16 @@ while :; do
   # wait for and nothing to conclude from. `full review` is the only command
   # that produces an artifact on demand; `review` is itself incremental and
   # no-ops while automatic review is un-paused.
-  if ((RE_REVIEW)) && ((elapsed >= FULL_REVIEW_AFTER)) && ((FORCED_FULL_REVIEW == 0)) \
+  #
+  # A spent quota window reaches the same escalation from the other side, on any
+  # cycle. The request that hit the limit was refused, not queued, so nothing
+  # arrives once the window reopens until something asks again — and the caller
+  # re-armed on the published delay precisely to ask. Without this the wait that
+  # follows a quota simply runs its budget out. The delay still applies: a review
+  # that did start silently takes minutes, and a command posted inside that
+  # window interrupts it.
+  if { ((RE_REVIEW)) || [[ $CR_LIMIT == spent ]]; } \
+    && ((elapsed >= FULL_REVIEW_AFTER)) && ((FORCED_FULL_REVIEW == 0)) \
     && [[ $CR_STATUS == in-progress ]]; then
     emit "needs_full_review" "post one @coderabbitai full review, then restart the waiter with --forced-full-review" '["coderabbit"]'
     exit 0

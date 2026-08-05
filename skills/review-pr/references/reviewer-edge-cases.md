@@ -31,10 +31,35 @@ review artifact.
     cause below it (most often "The pull request is closed"). Classified
     `failed`, which ends the wait but never passes: the commit is unreviewed.
   - `Review limit reached`, carrying `Next review available in: <n> <unit>`.
-    Classified `unavailable`, and the delay is parsed into
-    `coderabbit_retry_after` (seconds). Observed 6 seconds, 15, 18, 33 and 42
-    minutes across five pull requests — re-arm on the published number, never a
-    fixed interval.
+    Classified `unavailable` while the window still has time on it, and the
+    remaining seconds are reported as `coderabbit_retry_after`. Observed windows
+    of 6 seconds, 15, 18, 33 and 42 minutes across five pull requests — re-arm on
+    that number, never a fixed interval.
+- **A rate-limit notice is CodeRabbit reporting its own state, and only its own
+  wording says so.** Matching "rate limit" or "quota" anywhere in a comment it
+  authored reads its *summary of the diff* as a refusal: on one pull request
+  whose whole subject was quota handling, the walkthrough matched six times and
+  the wait ended `unavailable` 56 seconds in, on the first cycle, with no quota
+  involved and the review still running. The notices to match are the headings
+  and generated sentences — `Review rate limited`, `Review limit reached`,
+  `Your next included review will be available in <n> minutes` — plus the looser
+  refusals (`out of quota`, `temporarily unavailable`, `unable to review`) on
+  every surface *except* the walkthrough, whose body is a description of the
+  change by construction.
+- **A notice does not expire by itself, so bound it.** Scope admits any comment
+  timestamped at or after the head commit and a notice is by construction newer,
+  so moving `--review-start` forward changes nothing and only a new commit clears
+  one. Observed: a genuine 28-minute notice ended three successive waits in 3–4
+  seconds each, two of them *after* the window reopened and while a full review
+  was already running against that exact commit. Read a notice as live only while
+  CodeRabbit has said nothing since it and its published window has time left.
+  Once it is spent, nothing is coming on its own — the refused request was
+  dropped, not queued — so the escalation is one `@coderabbitai full review`.
+- The two retry wordings differ, and the command reply is the one that matters
+  most: `Your next included review will be available in 28 minutes` under
+  `⚠️ Action not completed`, against the walkthrough's `Next review available
+  in: <n> <unit>`. A pattern written for the second silently returns no delay for
+  the first — the exact notice a caller needs a delay for.
 - The rate-limit notice names the account whose quota ran out, and the quota is
   **per developer**: observed charged to both the repository owner and to
   `github-actions[bot]`, depending on which identity pushed. A loop running as a
@@ -77,10 +102,10 @@ review artifact.
 - Scope inline comments by their stable `original_commit_id`, not the movable
   `commit_id`; otherwise old resolved feedback can impersonate an exact-HEAD
   review after later pushes reposition the diff.
-- Quota or rate-limit text in a CodeRabbit comment is `unavailable`, not a
-  review. The waiter stops on it, but the verdict is still `needs-changes`:
-  CodeRabbit is the only gating reviewer, so an unavailable CodeRabbit means the
-  PR was never reviewed.
+- A live rate-limit notice is `unavailable`, not a review. The waiter stops on
+  it, but the verdict is still `needs-changes`: CodeRabbit is the only gating
+  reviewer, so an unavailable CodeRabbit means the PR was never reviewed. Quota
+  wording in prose it wrote *about the diff* is neither, and never ends a wait.
 - CodeRabbit answers `@coderabbitai review` only once per push in some
   configurations. Tag at most once per cycle; if the tag produces nothing within
   the budget, report `timeout` rather than tagging again.

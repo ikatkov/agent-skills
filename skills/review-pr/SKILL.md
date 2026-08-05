@@ -200,7 +200,9 @@ At this decision point, enforce all of these:
   then restart the helper once with `--forced-full-review`. Never escalate
   twice. Use `full review` and not `review` here: `review` is itself incremental
   and returns an ack while automatic review is un-paused, and that ack is not a
-  review of anything.
+  review of anything. This state also arrives on a first cycle whose rate-limit
+  window has run out: the refused request was dropped rather than queued, so
+  asking again is what ends the wait.
 - If state is `failed`, `timeout`, or `snapshot_fetch_failing`, read
   [reviewer-edge-cases.md](references/reviewer-edge-cases.md) before judging it.
 - If the helper exits `2` with no JSON, a dependency is missing or both
@@ -375,12 +377,21 @@ A rate limit belongs here because it expires on its own. The quota is
 per-developer and charged to whichever identity pushed, so a loop running as a
 bot spends a different allowance than the repository owner. When the helper
 reports `coderabbit: unavailable`, `coderabbit_retry_after` carries the seconds
-CodeRabbit itself published — **re-arm on that number, not on the default
-interval.** Observed values run from six seconds to forty-two minutes, so a fixed
-delay either idles through most of the window or wakes into the same limit.
-`failed` is the opposite case and never re-arms: CodeRabbit stopped, and the
-cause it prints (most often a pull request closed under the review) does not
+still left on the window CodeRabbit published — **re-arm on that number, not on
+the default interval.** Observed windows run from six seconds to forty-two
+minutes, so a fixed delay either idles through most of one or wakes into the same
+limit. `failed` is the opposite case and never re-arms: CodeRabbit stopped, and
+the cause it prints (most often a pull request closed under the review) does not
 clear by waiting.
+
+`unavailable` means a **live** notice: CodeRabbit's own refusal, with time still
+on its window and nothing said since. Once that window runs out the helper stops
+reporting it — the reviewer is free again, and a request that was refused is
+never retried on its own, so the next wait escalates to `needs_full_review`
+instead of dead-ending. Do not read a quota mention in CodeRabbit's prose as a
+refusal yourself either: it summarises every diff in its own words, so a pull
+request about rate limits earns a walkthrough that says "rate limit" while the
+review proceeds normally.
 
 On that only-waiting state, re-arm instead of stopping, so the operator never
 re-runs the helper by hand:
