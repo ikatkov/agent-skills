@@ -12,18 +12,63 @@ review artifact.
   `summarize by coderabbit.ai` marker, so the chatter filter used to discard it
   wholesale — but when a review finds nothing, CodeRabbit posts no review object
   and no inline comment, and edits `No actionable comments were generated in the
-  recent review` into that comment instead. Measured across 30 `ikatkov/qrz-bot`
-  pull requests: 10 carried that sentence, and in all 10 it sat in the same
+  recent review` into that comment instead. Measured across 30 pull requests on
+  one repository: 10 carried that sentence, and in all 10 it sat in the same
   comment as the reviewed range, whose end matched the pull request head in
-  14/14 spot checks. Accepted only with both halves present on one comment.
+  every spot check. Accepted only with both halves present on one comment.
+  This placement is CodeRabbit's documented behaviour, not an accident to be
+  tidied away later — see "Why did CodeRabbit not leave any review comments on
+  my pull request" in their knowledge base, which states the confirmation
+  appears below the Walkthrough section. There is no documented API, webhook or
+  check-run equivalent; reading the comment is the supported route.
 - The walkthrough is **mutable** — rewritten in place on each review — so anchor
   on the *end* of `between <base> and <head>`, never on the SHA appearing
-  anywhere in the body. On #61 the range read `between f9db6de and 706ff9a`
-  while a loop anchored at `f9db6de`: that is a review of the next commit.
-- The same comment also carries `Review limit reached` and `Review failed`
-  (the latter on a closed pull request). Neither carries the verdict sentence,
-  so neither is accepted; the rate-limit wording lands in the unavailable path
-  below via its own `rate limit` text.
+  anywhere in the body. A range reading `between A and B` while the loop is
+  anchored at `A` reports a review of `B`, not of `A`.
+- The same comment carries the two non-verdicts as well, and **both are
+  terminal** — waiting past either only spends the budget:
+  - `Review failed`, with its own `failure by coderabbit.ai` marker and the
+    cause below it (most often "The pull request is closed"). Classified
+    `failed`, which ends the wait but never passes: the commit is unreviewed.
+  - `Review limit reached`, carrying `Next review available in: <n> <unit>`.
+    Classified `unavailable` while the window still has time on it, and the
+    remaining seconds are reported as `coderabbit_retry_after`. Observed windows
+    of 6 seconds, 15, 18, 33 and 42 minutes across five pull requests — re-arm on
+    that number, never a fixed interval.
+- **A rate-limit notice is CodeRabbit reporting its own state, and only its own
+  wording says so.** Matching "rate limit" or "quota" anywhere in a comment it
+  authored reads its *summary of the diff* as a refusal: on one pull request
+  whose whole subject was quota handling, the walkthrough matched six times and
+  the wait ended `unavailable` 56 seconds in, on the first cycle, with no quota
+  involved and the review still running. The notices to match are the headings
+  and generated sentences — `Review rate limited`, `Review limit reached`,
+  `Your next included review will be available in <n> minutes` — plus the looser
+  refusals (`out of quota`, `temporarily unavailable`, `unable to review`) on
+  every surface *except* the walkthrough, whose body is a description of the
+  change by construction.
+- **A notice does not expire by itself, so bound it.** Scope admits any comment
+  timestamped at or after the head commit and a notice is by construction newer,
+  so moving `--review-start` forward changes nothing and only a new commit clears
+  one. Observed: a genuine 28-minute notice ended three successive waits in 3–4
+  seconds each, two of them *after* the window reopened and while a full review
+  was already running against that exact commit. Read a notice as live only while
+  CodeRabbit has said nothing since it and its published window has time left.
+  Once it is spent, nothing is coming on its own — the refused request was
+  dropped, not queued — so the escalation is one `@coderabbitai full review`.
+- The two retry wordings differ, and the command reply is the one that matters
+  most: `Your next included review will be available in 28 minutes` under
+  `⚠️ Action not completed`, against the walkthrough's `Next review available
+  in: <n> <unit>`. A pattern written for the second silently returns no delay for
+  the first — the exact notice a caller needs a delay for.
+- The rate-limit notice names the account whose quota ran out, and the quota is
+  **per developer**: observed charged to both the repository owner and to
+  `github-actions[bot]`, depending on which identity pushed. A loop running as a
+  bot therefore exhausts a different allowance than the human. Pro is 5 PR
+  reviews an hour and Pro+ is 10, on a rolling window, with additional spacing
+  above the 95th percentile of recent activity — so a five-cycle loop can consume
+  half a Pro+ hour by itself, and its later cycles are the ones that get spaced
+  out. `@coderabbitai rate limit` reports the remaining allowance without
+  consuming a review, which is the cheap way for a human to check.
 - **A review takes minutes.** `auto_incremental_review` defaults to on, so
   automatic review picks up each push without being asked; measured latency on
   one repository ran 100–440 seconds from push to the review artifact, on fix
@@ -42,11 +87,11 @@ review artifact.
   even that is missing there is nothing to wait for, which is what the
   `needs_full_review` escalation exists for. If that still yields nothing, the
   commit went unreviewed and the verdict says so.
-- **The full-review escalation cannot conjure a second verdict.** On #79 it
-  returned `Action performed / Full review finished` in four seconds: the review
-  had already run and already been reported in the walkthrough. Escalating past a
-  walkthrough that already answers for `HEAD_SHA` costs a full budget and yields
-  an acknowledgement.
+- **The full-review escalation cannot conjure a second verdict.** Where the
+  review has already run and already been reported in the walkthrough, it
+  returns `Action performed / Full review finished` within seconds. Escalating
+  past a walkthrough that already answers for `HEAD_SHA` costs a full budget and
+  yields an acknowledgement.
 - An **empty-body `COMMENTED` review** is the wrapper CodeRabbit puts around a
   thread reply. It marks a conversation, not a verdict, and it can appear within
   seconds of a push. An empty-body **`APPROVED`** at the exact HEAD is the
@@ -57,10 +102,10 @@ review artifact.
 - Scope inline comments by their stable `original_commit_id`, not the movable
   `commit_id`; otherwise old resolved feedback can impersonate an exact-HEAD
   review after later pushes reposition the diff.
-- Quota or rate-limit text in a CodeRabbit comment is `unavailable`, not a
-  review. The waiter stops on it, but the verdict is still `needs-changes`:
-  CodeRabbit is the only gating reviewer, so an unavailable CodeRabbit means the
-  PR was never reviewed.
+- A live rate-limit notice is `unavailable`, not a review. The waiter stops on
+  it, but the verdict is still `needs-changes`: CodeRabbit is the only gating
+  reviewer, so an unavailable CodeRabbit means the PR was never reviewed. Quota
+  wording in prose it wrote *about the diff* is neither, and never ends a wait.
 - CodeRabbit answers `@coderabbitai review` only once per push in some
   configurations. Tag at most once per cycle; if the tag produces nothing within
   the budget, report `timeout` rather than tagging again.
