@@ -249,10 +249,13 @@ payload as clean.
 Read bodies rather than trusting check success. CodeRabbit's own status check
 reports that it ran, and `reviews.fail_commit_status` defaults to false, so that
 check stays green with findings open — it carries no verdict at any point. On the
-first cycle, a CodeRabbit walkthrough, a `review in progress` note, or a green
-CodeRabbit check with no review body and no inline finding is engagement, not a
-review. A review whose state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA`
-is a verdict, whatever its body length. The acceptance rule in Section 6 is the
+first cycle, a `review in progress` note, or a green CodeRabbit check with no
+review body and no inline finding is engagement, not a review. A review whose
+state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA` is a verdict, whatever
+its body length — and so is a walkthrough comment reporting no actionable
+comments over a range ending at `HEAD_SHA`, which on a clean pull request is
+routinely the only artifact there is. A walkthrough without that sentence is
+still engagement. The acceptance rule in Section 6 is the
 same on a re-review cycle — nothing about a later cycle lowers the bar.
 
 ## 4. Triage against the scope contract, then fix
@@ -414,11 +417,21 @@ nothing more is the goal; declining scope creep is a `pass`, not a
 `needs-changes`.
 
 CodeRabbit's exact-HEAD response is a substantive response at `HEAD_SHA`, which
-is any one of a nonzero-body review, inline findings, or a review carrying the
-state `APPROVED` or `CHANGES_REQUESTED` on that exact commit. The state counts on
-its own because CodeRabbit approves with an empty body when it has nothing to
-say, which is the shape of every clean review — waiting for prose that will never
-arrive burns the whole budget on a verdict already given.
+is any one of a nonzero-body review, inline findings, a review carrying the
+state `APPROVED` or `CHANGES_REQUESTED` on that exact commit, or the walkthrough
+comment carrying `No actionable comments were generated in the recent review`
+over a reviewed range **ending** at `HEAD_SHA`. The state counts on its own
+because CodeRabbit approves with an empty body when it has nothing to say, which
+is the shape of every clean review — waiting for prose that will never arrive
+burns the whole budget on a verdict already given.
+
+The walkthrough counts because a clean review can produce no review object and no
+inline comment whatsoever: that one sentence, edited into the walkthrough
+comment, is the entire verdict. Both halves are required, on the same comment.
+The sentence alone names no commit, and the comment is mutable — CodeRabbit
+rewrites it in place on each review — so the anchor is the *end* of the range it
+reports. A range that merely *starts* at `HEAD_SHA` describes a review of the
+commit after it, and does not count.
 
 **The rule is the same on every cycle.** Automatic incremental review covers each
 new push, so a fix commit earns the same artifact a first commit does, and a
@@ -432,10 +445,14 @@ of these is an exact-HEAD response, on any cycle:
 - `No new commits to review` — a statement about CodeRabbit's own bookkeeping;
 - zero unresolved CodeRabbit threads — Section 4 resolves those threads itself.
 
-Silence is the hard case, not a pass. A clean incremental review sometimes emits
-nothing at all, which is what `needs_full_review` exists for: one
+Silence is the hard case, not a pass. Read the walkthrough comment before
+concluding a review is silent — a clean review usually lives there and nowhere
+else. Where even that is absent, `needs_full_review` exists: one
 `@coderabbitai full review`, and if that still yields no artifact bound to
 `HEAD_SHA`, the verdict is `needs-changes` naming the commit as unreviewed.
+Note what that escalation cannot do — on `ikatkov/qrz-bot#79` it answered
+`Action performed / Full review finished` in four seconds, because the review it
+was asked to redo had already run and already been reported in the walkthrough.
 
 `pass` means reviewed and ready to merge — nothing about whether the change
 merges, builds, deploys, or works live. Never merge from this skill; hand back to
