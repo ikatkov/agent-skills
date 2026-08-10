@@ -310,8 +310,7 @@ fetch_rollup() {
 }
 
 # True when the rules feature is unavailable on this plan (private repo without
-# Pro). Rules cannot exist there, so the correct reading is "no required
-# checks", not a fail-closed lookup failure.
+# Pro). Rules cannot exist there, so the correct reading is "no required checks".
 rules_feature_unavailable() {
   grep -qiE 'upgrade to github pro|make this repository public' <<<"$1"
 }
@@ -394,9 +393,9 @@ graphql_page() {
   printf '%s' "$body"
 }
 
-# Reported, not gated on. Section 4 of the skill resolves threads itself, so a
-# zero count is an account of this run's own actions rather than evidence about
-# the review — but it is what tells a reader whether anything is still open.
+# Reported and never gated on. Section 4 of the skill resolves threads itself, so
+# a zero count is an account of this run's own actions. It tells a reader whether
+# anything is still open.
 fetch_threads() {
   if [[ $GH_MODE == gh ]]; then
     fetch_json "$THREADS" gh api graphql --paginate -f query="$THREADS_QUERY" \
@@ -437,30 +436,27 @@ classify_reviews() {
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
     any(.[]; .login == "coderabbitai[bot]" and scope)')
 
-  # What CodeRabbit says when *it* is refusing — which is not the same as any
-  # comment of its that mentions a quota. CodeRabbit describes every diff in its
-  # own words, so a pull request about rate limits earns a walkthrough containing
-  # "rate limit", and reading that as a refusal reports the reviewer unavailable
+  # What CodeRabbit says when *it* is refusing. CodeRabbit describes every diff
+  # in its own words, so a pull request about rate limits earns a walkthrough
+  # containing "rate limit", and matching that reports the reviewer unavailable
   # on its own summary of the change, from the first cycle, with no quota
   # anywhere. Three narrowings, each onto a notice CodeRabbit actually publishes:
   #
   #   - the wording is its own headings and generated sentences — "Review rate
   #     limited", "Review limit reached", "your next included review will be
-  #     available in 28 minutes" — not the free-form "rate limit" it may write
-  #     about anything;
+  #     available in 28 minutes";
   #   - the looser refusals are read on every surface except the walkthrough,
   #     the one comment whose body is by definition a description of the diff;
   #   - and a body that also reports a review in progress, or one that found
-  #     nothing, is reporting work rather than declining it.
+  #     nothing, is reporting work it has done.
   #
-  # A notice must also still be live, because it never leaves the snapshot on its
-  # own: scope admits anything timestamped at or after the head commit, and a
-  # notice is by construction newer, so only a new commit clears one. Left
-  # unbounded it ends every later wait within seconds — including the waits that
-  # follow the window reopening, which are the ones the caller re-armed for.
-  # Live means CodeRabbit has said nothing since it, and the window it published
-  # has not run out. A notice past either is `spent`, which escalates below
-  # rather than ending the wait.
+  # A notice must also still be live, because it stays in the snapshot until a
+  # new commit clears it: scope admits anything timestamped at or after the head
+  # commit, and a notice is by construction newer. Left unbounded it ends every
+  # later wait within seconds, including the waits that follow the window
+  # reopening, which are the ones the caller re-armed for. Live means CodeRabbit
+  # has said nothing since it, and the window it published has time left. A
+  # notice past either is `spent`, which escalates below.
   CR_LIMIT=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
     def walkthrough: test("summarize by coderabbit\\.ai"; "i");
@@ -490,12 +486,12 @@ classify_reviews() {
       else "spent"
       end')
   [[ -n $CR_LIMIT ]] || CR_LIMIT=none
-  # A verdict counts two ways. Prose — an inline finding, or a review body that
-  # is more than CodeRabbit's own chatter. And a *state* on this exact commit:
-  # CodeRabbit posts APPROVED with an empty body when it has nothing to say,
-  # which is the shape of every clean review. Reading only prose leaves that
-  # approval invisible and grinds the whole wait budget to timeout, which is the
-  # cost paid by exactly the pull requests that needed no changes.
+  # A verdict counts two ways. Prose — an inline finding, or a review body
+  # carrying more than CodeRabbit's own chatter. And a *state* on this exact
+  # commit: CodeRabbit posts APPROVED with an empty body when it has nothing to
+  # say, which is the shape of every clean review. Reading prose alone leaves
+  # that approval invisible and grinds the wait budget to timeout on exactly the
+  # pull requests that needed no changes.
   #
   # The chatter filter covers every surface. CodeRabbit posts non-review prose
   # inline as well as at review level — command acknowledgements, and a refusal
@@ -504,9 +500,11 @@ classify_reviews() {
   # a push, so exempting the inline surface turns the whole wait into a no-op
   # exactly when a fix commit needs reviewing.
   #
-  # The state branch is anchored to `.commit == $sha` rather than the looser
-  # `scope`, because a review state means something only for the commit it
-  # names. That keeps the exact-HEAD guarantee the whole skill rests on.
+  # The state branch is anchored to `.commit == $sha`, because a review state
+  # means something only for the commit it names. That keeps the exact-HEAD
+  # guarantee the whole skill rests on, and it holds whether or not the
+  # repository dismisses stale approvals: CodeRabbit approves a pull request
+  # once, so the pull-request-level decision outlives the commit that earned it.
   #
   # The third branch reads the walkthrough comment, which the chatter filter
   # otherwise discards wholesale for carrying the `summarize by coderabbit.ai`
@@ -524,11 +522,11 @@ classify_reviews() {
   # body would accept a comment whose range merely *starts* at this commit, which
   # is what an incremental review of the commit after it reads like: a range
   # reading "between A and B" while the loop is anchored at A reports a review of
-  # B, not of A.
+  # B.
   #
-  # A body carrying "Review limit reached" or "Review failed" never reaches here:
-  # it does not carry the verdict sentence, and the rate-limit wording lands in
-  # cr_unavailable below.
+  # A body carrying "Review limit reached" or "Review failed" lacks the verdict
+  # sentence and stops here. The rate-limit wording lands in cr_unavailable
+  # below.
   local cr_substantive
   cr_substantive=$(snapshot_query '
     def scope: (.commit == $sha) or ((.ts // "") >= $review_start) or ((.ts // "") >= $commit_date) or ((.body // "") | contains($sha) or contains($short));
@@ -562,16 +560,14 @@ classify_reviews() {
     def failed_at_head: test("failure by coderabbit\\.ai|##\\s*review failed"; "i") and test("between [0-9a-f]{40} and " + $sha; "i");
     any(.[]; .login == "coderabbitai[bot]" and ((.body // "") | failed_at_head))')
 
-  # How long the limit has left to run, counted from the notice rather than
-  # copied off it. Observed windows ranged from six seconds to forty-two
-  # minutes, so a caller that re-arms on a fixed interval either wastes most of
-  # one or wakes into the same limit — and a wait can return a quarter of an hour
-  # after the notice was posted, which is enough of a forty-two-minute window to
+  # How long the limit has left to run, counted forward from the notice's own
+  # timestamp. Published windows range from seconds to tens of minutes, so a
+  # caller re-arming on a fixed interval misses; and a wait can return a quarter
+  # of an hour after the notice was posted, which is enough of a long window to
   # matter. Both wordings are read: the walkthrough's `Next review available in:
   # <n> <unit>` and the command reply's `Your next included review will be
-  # available in <n> minutes`, whose "included" the narrower pattern missed
-  # entirely, handing back null for the one notice a caller most needs to re-arm
-  # on.
+  # available in <n> minutes`. A pattern that omits "included" hands back null
+  # for the one notice a caller most needs to re-arm on.
   CR_RETRY_AFTER=$(snapshot_query '
     def window:
       (
@@ -687,8 +683,8 @@ while :; do
   # no-ops while automatic review is un-paused.
   #
   # A spent quota window reaches the same escalation from the other side, on any
-  # cycle. The request that hit the limit was refused, not queued, so nothing
-  # arrives once the window reopens until something asks again — and the caller
+  # cycle. The request that hit the limit was refused and dropped, so the
+  # reopening window brings nothing until something asks again — and the caller
   # re-armed on the published delay precisely to ask. Without this the wait that
   # follows a quota simply runs its budget out. The delay still applies: a review
   # that did start silently takes minutes, and a command posted inside that
