@@ -20,33 +20,39 @@ push; the fallback trigger is a `@coderabbitai review` comment. The verdict wait
 on CodeRabbit and on the ruleset-required status checks — nothing else.
 
 `reviewDecision` carries CodeRabbit's standing answer across cycles wherever the
-repository enables `reviews.request_changes_workflow`: it holds
-`CHANGES_REQUESTED` while any of its comments is open and turns `APPROVED` once
-they are resolved and the pre-merge checks pass.
+repository enables `reviews.request_changes_workflow`. It holds
+`CHANGES_REQUESTED` while any of its comments is open, and turns `APPROVED` once
+they are resolved and the pre-merge checks pass. That approval is a real GitHub
+review object, submitted for a clean review with no unresolved CodeRabbit threads
+and no blocking pre-merge checks.
+
+**CodeRabbit approves a pull request once.** The approval stands over every later
+commit, so `reviewDecision` keeps reading `APPROVED` for commits the reviewer has
+yet to see. It tracks the commit under review where branch protection dismisses
+stale approvals on push. Everywhere else, read it as a fact about the pull
+request, and take the exact-HEAD answer from Section 6.
 
 Read which case applies from the snapshot Section 3 already fetches, and see
 **Repository expectations** below for what each costs the run.
 
 **Never post `@coderabbitai approve`.** It submits an approving review on demand,
 with an empty body, whatever the state of the code — so it forges the exact
-signal this skill waits on. `@coderabbitai review` is the only command this skill
-posts.
+signal this skill waits on. `@coderabbitai review` and `@coderabbitai full
+review` are the only commands this skill posts.
 
-Human reviewers never gate the verdict, but their unresolved review threads still
-block `pass`: triage every unresolved thread in Section 4 regardless of who
-opened it.
+Unresolved human review threads block `pass`: triage every unresolved thread in
+Section 4 regardless of who opened it. The verdict itself waits on CodeRabbit.
 
 ## Repository expectations
 
 This skill runs against whatever configuration a repository already has and
 changes none of it. Three conditions decide how well the loop runs, and all three
 are read from evidence the run already produces. **Name every one that is missing
-in the verdict**, so the person reading it can decide whether to set it. A run
-that quietly absorbs the cost teaches nobody.
+in the verdict**, so the person reading it can decide whether to set it.
 
 | Condition | What it buys the loop | How this run detects it |
 |---|---|---|
-| `reviews.request_changes_workflow: true` | `reviewDecision` becomes CodeRabbit's standing answer, so convergence is read rather than inferred | `reviewDecision` is `APPROVED` or `CHANGES_REQUESTED`. `null` with CodeRabbit reviews present means it is off |
+| `reviews.request_changes_workflow: true`, **with** stale approvals dismissed on push | `reviewDecision` becomes CodeRabbit's standing answer, so convergence is read from the decision | `reviewDecision` is `APPROVED` or `CHANGES_REQUESTED`. `null` with CodeRabbit reviews present means it is off. An `APPROVED` review whose `commit_id` names an older commit means the dismissal half is missing |
 | `reviews.auto_review.auto_pause_after_reviewed_commits: 0` | Automatic review survives a loop longer than five commits | The default is 5. A reviewer that answered early cycles and goes quiet on a later one has likely reached it |
 | A non-bot identity for the loop's own comments | CodeRabbit reads the fix rationale, answers a declined finding, and resolves the thread itself | The run knows who its token authenticates as, and a `Skipped: comment is from another GitHub bot` reply is the positive proof |
 
@@ -54,23 +60,32 @@ None is required. With the first off, Section 6's acceptance rule carries the
 verdict alone and CodeRabbit's reviews land as `COMMENTED`. With the second at its
 default, the tag path in Section 2 recovers the paused reviewer. With the third
 missing, every review thread is a monologue and some cycles end `needs-changes` on
-a commit nothing reviewed. Each costs the run time or certainty it could have had,
-which is what the verdict line reports.
+a commit nothing reviewed. Each costs the run time or certainty, which is what
+the verdict line reports.
 
-**Check one thing before enabling the first.** Where GitHub's Code Review Limits
+Set the first as a pair. The workflow enabled while stale approvals survive a
+push leaves a standing `APPROVED` over every later commit, which reads as
+convergence the loop has not earned. Report that shape by name.
+
+**Check two things before enabling the first.** Where GitHub's Code Review Limits
 are on, only accounts with explicitly granted read access or higher may submit a
-review that approves or requests changes — ordinary comments still land. Turning
-`request_changes_workflow` on under that restriction does not improve the signal,
-it stops CodeRabbit posting review comments at all, with `Failed to post review
-comments`. Look at **Settings → Access → Moderation options → Code review
-limits** first, and either turn off "Limit to users explicitly granted read or
-higher access" or grant CodeRabbit read access. Recommending the setting without
-this check trades a working reviewer for a cleaner status field.
+review that approves or requests changes; ordinary comments still land. Under
+that restriction, `request_changes_workflow` stops CodeRabbit posting review
+comments at all, with `Failed to post review comments`. Look at **Settings →
+Access → Moderation options → Code review limits** first, and either turn off
+"Limit to users explicitly granted read or higher access" or grant CodeRabbit
+read access.
 
-The third is not a CodeRabbit setting and cannot be configured on their side — see
+Then turn on **dismiss stale pull request approvals when new commits are
+pushed**, in the branch rule protecting the base branch. It is what makes the
+approval arrive once per commit, and so what makes `reviewDecision` track the
+commit under review.
+
+The third is a property of the token this skill runs with, and CodeRabbit exposes
+no setting for it — see
 [reviewer-edge-cases.md](references/reviewer-edge-cases.md). The remedy is a
 machine-user PAT for the commenting calls. An `actions/create-github-app-token`
-installation token does not qualify: it still authenticates as a `Bot`.
+installation token authenticates as a `Bot`, which the skip applies to.
 
 ## 0. Preflight: pick one transport, or stop
 
@@ -79,11 +94,11 @@ transport**. Probe in this order, before anything else:
 
 ```bash
 for c in bash jq git; do command -v "$c" >/dev/null || echo "MISSING: $c"; done
-# Transport A: gh — must work END TO END, not just auth. In a macOS command
+# Transport A: gh — prove it END TO END with a real API call. In a macOS command
 # sandbox, `gh auth status` can pass while every API call dies on TLS
 # (`x509: OSStatus …`), because Go's platform verifier needs the keychain.
 gh api rate_limit >/dev/null 2>&1 && echo "TRANSPORT: gh"
-# Transport B: curl + token — a complete equivalent, not a degraded fallback.
+# Transport B: curl + token — a complete equivalent.
 [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] && \
   curl -fsS -H "Authorization: Bearer ${GH_TOKEN:-$GITHUB_TOKEN}" \
     https://api.github.com/rate_limit >/dev/null 2>&1 && echo "TRANSPORT: curl"
@@ -97,8 +112,8 @@ substitutes.
 
 If `bash`/`jq`/`git` is missing, or neither transport works, **stop the skill
 immediately.** Report exactly what is unavailable and end the turn. A partial
-review is worse than none: it produces a confident verdict from data it could
-not read. Do not work around it. Specifically, never:
+review produces a confident verdict from data it could not read. Do not work
+around it. Specifically, never:
 
 - install, download, or build `gh`, `jq`, or any other dependency;
 - parse command output with `sed`/`awk`/`grep` because `jq` is missing;
@@ -147,8 +162,8 @@ arguments, same contract. Run it with the PR,
 HEAD, anchors, and base branch. It silently checks CodeRabbit's artifacts and the
 ruleset-required status checks, preserves the last good snapshot, and emits one
 terminal JSON object.
-Use its `--once` mode only for a read-only diagnostic probe or validation, not
-for the normal bounded wait.
+Use its `--once` mode for a read-only diagnostic probe or validation. The normal
+bounded wait runs without it.
 
 On Claude Code, invoke the helper through **one main-session `Monitor` call**
 with `timeout_ms` slightly above the helper's 900-second budget. Do not delegate
@@ -179,10 +194,10 @@ re-review cycle the wait *is* the mechanism: post nothing, and let it run. The
 flag changes only what happens when the wait runs dry, because a clean
 incremental review can emit no artifact at all — see `needs_full_review` below.
 
-A review takes minutes, not seconds. Measure the repository's own push-to-review
-latency before shortening any delay: `--tag-after` and `--full-review-after`
-default to values that sit above a several-minute review, and a command posted
-inside that window interrupts the automatic review it was meant to provoke.
+A review takes minutes. Measure the repository's own push-to-review latency
+before shortening any delay: `--tag-after` and `--full-review-after` default to
+values that sit above a several-minute review, and a command posted inside that
+window interrupts the automatic review it was meant to provoke.
 
 At this decision point, enforce all of these:
 
@@ -193,29 +208,27 @@ At this decision point, enforce all of these:
 - If state is `needs_tag` — cycle 1 only — post one `@coderabbitai review`
   comment, then restart the helper once with `--tagged-coderabbit`.
   Never retag. If you filter comments by time afterwards, derive `since=`
-  from the posted tag comment's `created_at` in the API response, not from your
-  own clock — CodeRabbit can reply within seconds and a self-derived window
-  misses it.
+  from the posted tag comment's `created_at` in the API response. CodeRabbit can
+  reply within seconds, and a window derived from your own clock misses it.
 - If state is `needs_full_review`, post one `@coderabbitai full review` comment,
   then restart the helper once with `--forced-full-review`. Never escalate
-  twice. Use `full review` and not `review` here: `review` is itself incremental
-  and returns an ack while automatic review is un-paused, and that ack is not a
-  review of anything. This state also arrives on a first cycle whose rate-limit
-  window has run out: the refused request was dropped rather than queued, so
-  asking again is what ends the wait.
+  twice. Use `full review` here; `review` is itself incremental and returns an
+  acknowledgement while automatic review is un-paused. This state also arrives
+  on a first cycle whose rate-limit window has run out: the refused request was
+  dropped, so asking again ends the wait.
 - If state is `failed`, `timeout`, or `snapshot_fetch_failing`, read
   [reviewer-edge-cases.md](references/reviewer-edge-cases.md) before judging it.
 - If the helper exits `2` with no JSON, a dependency is missing or both
   transports failed. Stop as in Section 0 — do not retry it and do not review
   by hand.
 
-`ready` means waiting is complete, not that the PR passes. The final snapshot
-and triage remain authoritative, and the acceptance rule in Section 6 says what
-counts as CodeRabbit's exact-HEAD response.
+`ready` means waiting is complete. The final snapshot and triage decide whether
+the PR passes, and the acceptance rule in Section 6 says what counts as
+CodeRabbit's exact-HEAD response.
 
-`unresolved_coderabbit_threads` in the helper's JSON is reported, never gated
-on. Section 4 resolves those threads itself, so a zero count describes this
-run's own actions rather than anything CodeRabbit decided.
+`unresolved_coderabbit_threads` in the helper's JSON is reported and never gated
+on. Section 4 resolves those threads itself, so a zero count describes this run's
+own actions.
 
 ## 3. Fetch one final snapshot
 
@@ -230,8 +243,8 @@ After the waiter stops, fetch the full bodies once from all three REST surfaces:
 
 If the issue-comments REST call fails, fetch the same full top-level comment
 bodies through the paginated GraphQL pull-request `comments` connection. A
-successful equivalent fallback is a valid surface; an empty response caused by
-a failed command is not.
+successful equivalent fallback is a valid surface. An empty response caused by a
+failed command fails closed.
 
 REST review payloads have no `severity` field. Read CodeRabbit's severity label
 from its body. Only inline findings carry `path:line`. Scope inline findings with
@@ -258,17 +271,20 @@ Also fetch the base ruleset and
 A failed snapshot or ruleset lookup fails closed; never interpret an empty
 payload as clean.
 
-Read bodies rather than trusting check success. CodeRabbit's own status check
-reports that it ran, and `reviews.fail_commit_status` defaults to false, so that
-check stays green with findings open — it carries no verdict at any point. On the
-first cycle, a `review in progress` note, or a green CodeRabbit check with no
-review body and no inline finding is engagement, not a review. A review whose
-state is `APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA` is a verdict, whatever
-its body length — and so is a walkthrough comment reporting no actionable
-comments over a range ending at `HEAD_SHA`, which on a clean pull request is
-routinely the only artifact there is. A walkthrough without that sentence is
-still engagement. The acceptance rule in Section 6 is the
-same on a re-review cycle — nothing about a later cycle lowers the bar.
+Take the verdict from comment and review bodies. CodeRabbit's own review-progress
+check is bound to the head commit and reports that the run **finished**;
+`reviews.fail_commit_status` defaults to false, so it goes green with findings
+open, and no acceptance rule below rests on it. Where the repository enables it,
+read it once for completion: a run that finished and said nothing is the silence
+`needs_full_review` answers.
+
+A `review in progress` note counts as engagement. So does a green CodeRabbit
+check with no review body and no inline finding. A review whose state is
+`APPROVED` or `CHANGES_REQUESTED` at `HEAD_SHA` is a verdict at any body length,
+and so is a walkthrough comment reporting no actionable comments over a range
+ending at `HEAD_SHA`, which on a clean pull request is routinely the only
+artifact present. A walkthrough carrying neither is engagement. Section 6's
+acceptance rule holds on every cycle.
 
 ## 4. Triage against the scope contract, then fix
 
@@ -309,11 +325,11 @@ Then, for the findings that survive triage:
 - Ask the user on a design judgment call. Reply to a false positive with
   evidence.
 - For consistency findings, trace the real resolver and make both paths read the
-  same runtime source; symmetric-looking code is not enough.
+  same runtime source.
 
 Never edit a file outside the PR's changed-file list to satisfy a finding. If a
 correct fix genuinely requires touching a new file, say so and get the user's
-agreement first — that is a scope change, not a review fix.
+agreement first. That is a scope change.
 
 Always reply before resolving. Resolve only a finding you fixed or explicitly
 declined as out of scope; anything still open or awaiting the user stays
@@ -333,10 +349,10 @@ covers it; otherwise leave it unresolved and tell the user.
 Every ruleset-required check must be `SUCCESS`/`SKIPPED`; a missing required
 context is pending. A ruleset lookup failure is `needs-changes` — with one
 carve-out: HTTP 403 with "Upgrade to GitHub Pro or make this repository public"
-means the rules feature is unavailable on this plan, so no rules can exist;
-treat that as an empty ruleset (no required checks), not a failed lookup. A required
-`pull_request` approval gate only evaluates once the PR is ready for review; on a
-draft PR report it as deferred instead of waiting for it.
+means the rules feature is unavailable on this plan, so no rules can exist. Read
+that as an empty ruleset with no required checks. A required `pull_request`
+approval gate only evaluates once the PR is ready for review; on a draft PR,
+report it as deferred.
 `BLOCKED`/`DIRTY`/`UNKNOWN` blocks unless only that ready-only gate remains with
 zero pending checks and unresolved threads.
 
@@ -344,9 +360,9 @@ Commit only files introduced relative to the cycle baseline. Stop if unrelated
 edits appear. Before pushing, diff the new changed-file list against the `SCOPE`
 list from Section 1: a file that review fixes added to the PR is a scope change
 the user has not seen — stop and confirm it. Run the repo's own
-lint/format/typecheck entry point on the changed files — read `CONTRIBUTING.md`,
-`AGENTS.md`, `CLAUDE.md`, or the package/Makefile scripts to find it rather than
-guessing a command.
+lint/format/typecheck entry point on the changed files, reading
+`CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, or the package/Makefile scripts to
+find the command.
 
 If the accepted fixes made the PR description inaccurate, update the description
 to match what the PR now does. Never let the diff drift ahead of its stated
@@ -356,15 +372,22 @@ Push fixes, re-anchor the new HEAD, and run another deterministic wait with
 `--re-review-cycle` set (Section 2). Cap at five cycles; each cycle must make a
 concrete fix. Stop on repeated or non-actionable churn.
 
+**Every cycle spends a review.** Automatic incremental review of a pushed fix
+counts against the hourly allowance exactly as a first review does, and so does
+each `@coderabbitai review` or `full review` this skill posts. Five cycles are
+therefore five reviews before either escalation, against ten an hour on Pro+ and
+five on Pro — the accounting behind the rate limits in Section 5a. A cycle that
+pushes a one-character fix costs the same as one that pushes a rewrite, so batch
+a cycle's fixes into a single push.
+
 The approval trails the resolution that triggers it, so a wait can return while
 `reviewDecision` still reads `CHANGES_REQUESTED` from the review you just
 answered. With every finding fixed and the decision still standing, let it settle
-through the same turn-free mechanism as Section 2, and judge afterwards. An LLM
-polling loop is the wrong tool here as everywhere else in this skill — including
-when the helper returns something you doubt. A waiter that stops too early is a
-bug to report, not a licence to hand-roll a `while` loop around `gh api`.
+through the same turn-free mechanism as Section 2, and judge afterwards. Never
+hand-roll a `while` loop around `gh api`, including when the helper returns
+something you doubt. Report a waiter that stops too early as a bug.
 
-## 5a. Re-arm on only-waiting, don't dead-end a pending PR
+## 5a. Re-arm on only-waiting
 
 Before returning `needs-changes`, check whether the *only* blocker is external
 progress — CodeRabbit still in-progress, a rate limit with time left to run, or a
@@ -377,24 +400,21 @@ A rate limit belongs here because it expires on its own. The quota is
 per-developer and charged to whichever identity pushed, so a loop running as a
 bot spends a different allowance than the repository owner. When the helper
 reports `coderabbit: unavailable`, `coderabbit_retry_after` carries the seconds
-still left on the window CodeRabbit published — **re-arm on that number, not on
-the default interval.** Observed windows run from six seconds to forty-two
-minutes, so a fixed delay either idles through most of one or wakes into the same
-limit. `failed` is the opposite case and never re-arms: CodeRabbit stopped, and
-the cause it prints (most often a pull request closed under the review) does not
-clear by waiting.
+still left on the window CodeRabbit published — **re-arm on that number.**
+Published windows run from seconds to tens of minutes, so any fixed delay misses.
+`failed` never re-arms: CodeRabbit has stopped, and the cause it prints (most
+often a pull request closed under the review) persists through any wait.
 
 `unavailable` means a **live** notice: CodeRabbit's own refusal, with time still
 on its window and nothing said since. Once that window runs out the helper stops
-reporting it — the reviewer is free again, and a request that was refused is
-never retried on its own, so the next wait escalates to `needs_full_review`
-instead of dead-ending. Do not read a quota mention in CodeRabbit's prose as a
-refusal yourself either: it summarises every diff in its own words, so a pull
-request about rate limits earns a walkthrough that says "rate limit" while the
-review proceeds normally.
+reporting it, and the next wait escalates through `needs_full_review`, because a
+refused request is dropped. Read a refusal only from CodeRabbit's own notice
+wording. It summarises every diff in its own words, so a pull request about rate
+limits earns a walkthrough containing "rate limit" while the review proceeds
+normally.
 
-On that only-waiting state, re-arm instead of stopping, so the operator never
-re-runs the helper by hand:
+On that only-waiting state, re-arm, so the operator never re-runs the helper by
+hand:
 
 - **Claude Code / dynamic-loop harness:** schedule a self-paced wake-up
   (`ScheduleWakeup`, dynamic-mode loop) with a long fallback interval (~20–30
@@ -426,7 +446,8 @@ GITHUB_REVIEW_RESULT:
 - Files added to the PR by review fixes: <list or none>
 - Unresolved actionable threads: <count>
 - Review decision: <APPROVED/CHANGES_REQUESTED/null; null where the
-  request-changes workflow is off>
+  request-changes workflow is off. On APPROVED, name the commit the approving
+  review carries>
 - Repository configuration to set: <each setting from Repository expectations
   this run found missing, with what it cost; or none>
 - Pending required checks: <list or none; include mergeStateStatus>
@@ -443,58 +464,59 @@ the request-changes workflow is enabled, and every required check is
 
 `reviewDecision` is necessary and never sufficient. Auto-approval fires once
 CodeRabbit's comments are resolved, and Section 4 puts resolution in this skill's
-own hands — so an agent that resolves a thread it did not fix manufactures its
-own `APPROVED`, and the flag confirms only that CodeRabbit agrees with what the
-skill already did. The substantive conditions above are what make the resolution
-honest. Read the decision as the last check on a case built elsewhere. A PR that ships exactly what its description promised and
-nothing more is the goal; declining scope creep is a `pass`, not a
-`needs-changes`.
+own hands, so the flag confirms that CodeRabbit agrees with what the skill
+already did — which is why Section 4 resolves only what it fixed or declined. The
+field also carries no commit: CodeRabbit approves a pull request once, so an
+`APPROVED` read on cycle two can be the approval earned on cycle one.
+**Take the exact-HEAD response from the acceptance rule below.** Check the
+approving review's own `commit_id` against `HEAD_SHA` before reading the decision
+as this cycle's answer, and where it names an older commit, report the missing
+dismissal under Repository configuration. The substantive conditions above are
+what make the resolution honest. Read the decision as the last check on a case
+built elsewhere. A PR that ships exactly what its description promised is the
+goal, and declining scope creep is a `pass`.
 
 CodeRabbit's exact-HEAD response is a substantive response at `HEAD_SHA`, which
 is any one of a nonzero-body review, inline findings, a review carrying the
 state `APPROVED` or `CHANGES_REQUESTED` on that exact commit, or the walkthrough
 comment carrying `No actionable comments were generated in the recent review`
-over a reviewed range **ending** at `HEAD_SHA`. The state counts on its own
-because CodeRabbit approves with an empty body when it has nothing to say, which
-is the shape of every clean review — waiting for prose that will never arrive
-burns the whole budget on a verdict already given.
+over a reviewed range **ending** at `HEAD_SHA`. The state counts on its own:
+CodeRabbit approves with an empty body when it has nothing to say, which is the
+shape of every clean review.
 
 The walkthrough counts because a clean review can produce no review object and no
-inline comment whatsoever: that one sentence, edited into the walkthrough
-comment, is the entire verdict. Both halves are required, on the same comment.
-The sentence alone names no commit, and the comment is mutable — CodeRabbit
-rewrites it in place on each review — so the anchor is the *end* of the range it
-reports. A range that merely *starts* at `HEAD_SHA` describes a review of the
-commit after it, and does not count.
+inline comment at all — that one sentence, edited into the walkthrough comment,
+is the entire verdict. Require both halves on the same comment. The sentence
+alone names no commit, and CodeRabbit rewrites the comment in place on each
+review, so the anchor is the *end* of the range it reports. A range that
+**starts** at `HEAD_SHA` describes a review of the commit after it.
 
 **The rule is the same on every cycle.** Automatic incremental review covers each
-new push, so a fix commit earns the same artifact a first commit does, and a
-weaker rule for later cycles buys nothing but false passes. In particular, none
-of these is an exact-HEAD response, on any cycle:
+new push, so a fix commit earns the same artifact a first commit does. These
+count as engagement on any cycle:
 
 - an empty-body `COMMENTED` review — CodeRabbit wraps its thread replies in one,
-  so it marks a conversation, not a verdict;
+  so it marks a conversation;
 - `Review finished` or `Action performed` — the acknowledgement of a command,
-  emitted in seconds whether or not anything was reviewed;
+  emitted within seconds of the command itself;
 - `No new commits to review` — a statement about CodeRabbit's own bookkeeping;
 - zero unresolved CodeRabbit threads — Section 4 resolves those threads itself.
 
-Silence is the hard case, not a pass. Read the walkthrough comment before
-concluding a review is silent — a clean review usually lives there and nowhere
-else. Where even that is absent, `needs_full_review` exists: one
-`@coderabbitai full review`, and if that still yields no artifact bound to
-`HEAD_SHA`, the verdict is `needs-changes` naming the commit as unreviewed.
-Note what that escalation cannot do: asked to redo a review that has already run
-and already been reported in the walkthrough, it answers
-`Action performed / Full review finished` within seconds and produces nothing.
+Silence is the hard case. Read the walkthrough comment before concluding a review
+is silent; a clean review usually lives there. Where even that is absent,
+`needs_full_review` exists: one `@coderabbitai full review`, and if that still
+yields no artifact bound to `HEAD_SHA`, the verdict is `needs-changes` naming the
+commit as unreviewed. Asked to redo a review already reported in the walkthrough,
+that escalation answers `Action performed / Full review finished` within seconds
+and produces nothing.
 
-`pass` means reviewed and ready to merge — nothing about whether the change
-merges, builds, deploys, or works live. Never merge from this skill; hand back to
-the operator.
+`pass` means reviewed and ready to merge. Its scope ends there: building,
+deploying, and working live all sit outside it. Never merge from this skill; hand
+back to the operator.
 
 Return `needs-changes` for an unresolved finding/thread, a failed or pending
 required check, an engaged-but-incomplete CodeRabbit review, CodeRabbit being
 unavailable (quota/rate limit), or `snapshot_fetch_failing`. When the *only*
 remaining blocker is a still-in-progress CodeRabbit review or a
 pending-not-failed required check with nothing actionable left, route through 5a
-(re-arm) instead of dead-ending on this verdict.
+and re-arm.
