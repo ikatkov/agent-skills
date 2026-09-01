@@ -50,6 +50,7 @@ npx skills add ikatkov/agent-skills --all
 | `instagram-gallery-download` | Download Instagram post/carousel media with `gallery-dl`. |
 | `llm-council` | Pressure-test a decision with five independent advisor perspectives and a synthesis. |
 | `local-visual-reasoning-scorer` | Run local OCR and visual reasoning on macOS with a running local VLM endpoint. |
+| `long-term-campaigns` | Hand off and operate durable monitoring campaigns across disposable agent sessions. |
 | `media-archiver` | Convert a web page into an offline-ready local video gallery. |
 | `obsidian-inbox` | Classify, reformat, and file raw notes dropped in the Obsidian inbox folder. |
 | `obsidian-markdown` | Create and edit Obsidian Flavored Markdown. |

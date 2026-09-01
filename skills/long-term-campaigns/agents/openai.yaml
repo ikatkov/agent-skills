@@ -1,0 +1,4 @@
+interface:
+  display_name: "Long-Term Campaigns"
+  short_description: "Hand off and operate durable monitoring campaigns"
+  default_prompt: "Use $long-term-campaigns to hand this ongoing work off as a new durable campaign."
