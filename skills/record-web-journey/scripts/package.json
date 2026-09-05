@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "agent-browser": "0.27.0",
     "playwright": "1.58.2"
   }
 }

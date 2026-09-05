@@ -166,7 +166,7 @@ function redactUrl(value) {
   try { const u = new URL(value); return `${u.origin}${u.pathname}`; } catch { return '[URL unavailable]'; }
 }
 
-function queueCapture(page, kind, label) {
+function queueCapture(page, kind, label, clickPoint) {
   captureQueue = captureQueue.then(async () => {
     if (page.isClosed()) return;
     await page.waitForTimeout(250);
@@ -174,7 +174,27 @@ function queueCapture(page, kind, label) {
     step += 1;
     const fileName = `${String(step).padStart(3, '0')}-${kind}-${safeSlug(label)}.png`;
     try {
+      if (clickPoint) {
+        await page.evaluate(({ x, y }) => {
+          document.getElementById('__record-flow-click-marker')?.remove();
+          const marker = document.createElement('div');
+          marker.id = '__record-flow-click-marker';
+          Object.assign(marker.style, {
+            position: 'fixed', left: `${x - 12}px`, top: `${y - 12}px`,
+            width: '24px', height: '24px', border: '3px solid #ef4444', borderRadius: '9999px',
+            background: 'rgb(239 68 68 / 20%)', boxSizing: 'border-box', pointerEvents: 'none',
+            zIndex: '2147483647',
+          });
+          document.documentElement.append(marker);
+          setTimeout(() => marker.remove(), 800);
+        }, clickPoint).catch(() => {});
+      }
       await page.screenshot({ path: resolve(screenshotDir, fileName), fullPage: false });
+      if (clickPoint) {
+        await page.evaluate(() => {
+          document.getElementById('__record-flow-click-marker')?.remove();
+        }).catch(() => {});
+      }
       await appendFile(
         stepsPath,
         [`${step}. **${kind}** — ${label}`, `   - URL: ${redactUrl(page.url())}`, `   - Screenshot: [${fileName}](screenshots/${fileName})`, ''].join('\n'),
@@ -207,7 +227,9 @@ const context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
 await context.exposeBinding('__recordManualClick', async ({ page, frame }, event) => {
   if (frame !== page.mainFrame()) return;
   const label = typeof event?.label === 'string' ? event.label : 'unlabelled element';
-  await queueCapture(page, 'click', label);
+  const clickPoint =
+    Number.isFinite(event?.x) && Number.isFinite(event?.y) ? { x: event.x, y: event.y } : undefined;
+  await queueCapture(page, 'click', label, clickPoint);
 });
 
 await context.addInitScript(() => {
@@ -226,7 +248,9 @@ await context.addInitScript(() => {
           ? document.elementFromPoint(event.clientX, event.clientY) ?? element
           : element;
 
+      document.getElementById('__record-flow-click-marker')?.remove();
       const marker = document.createElement('div');
+      marker.id = '__record-flow-click-marker';
       Object.assign(marker.style, {
         position: 'fixed', left: `${event.clientX - 12}px`, top: `${event.clientY - 12}px`,
         width: '24px', height: '24px', border: '3px solid #ef4444', borderRadius: '9999px',
@@ -241,7 +265,7 @@ await context.addInitScript(() => {
         (named !== document.documentElement && named !== document.body
           ? named.textContent?.trim().replaceAll(/\s+/g, ' ').slice(0, 100)
           : '') || `${named.tagName.toLowerCase()} (no visible target)`;
-      void window.__recordManualClick({ label });
+      void window.__recordManualClick({ label, x: event.clientX, y: event.clientY });
     },
     true,
   );
