@@ -202,6 +202,10 @@ function queueCapture(page, kind, label, clickPoint) {
     } catch (error) {
       await appendFile(stepsPath, `${step}. **${kind}** — ${label} (screenshot unavailable: ${String(error)})\n\n`);
     }
+  }).catch((error) => {
+    // Keep the queue alive: a page that closes mid-capture would otherwise skip every later
+    // capture and abort the run before Playwright finalizes the videos.
+    console.error(`Skipped a ${kind} capture (${label}): ${String(error)}`);
   });
   return captureQueue;
 }
