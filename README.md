@@ -59,6 +59,7 @@ npx skills add ikatkov/agent-skills --all
 | `review-pr` | Drive the CodeRabbit review loop on the current branch PR to a verdict, fixing only what the PR's stated scope covers. |
 | `ticket-and-pr-prose` | Write a Linear ticket or PR description that reads plain-language at the top and engineering-deep at the bottom. |
 | `video-feed-ocr` | Extract visible text from sampled video frames. |
+| `wispr-live` | Stream the live transcript of the meeting Wispr Flow is recording on macOS. |
 | `yt-dlp` | Download videos or extract audio/subtitles with `yt-dlp`. |
 
 ## Structure

@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Stream the live transcript of the meeting Wispr Flow is recording on this Mac.
+
+Wispr Flow appends each finished utterance to
+    ~/Library/Application Support/Wispr Flow/meetings/<meeting-id>/live.ndjson
+as one JSON line. Lines land in batches about every 10 seconds, 5-20 seconds
+after they were spoken; the file only ever grows.
+
+While a meeting records, its folder also holds raw audio (mic.pcm,
+system.pcm). Wispr Flow removes those files when the meeting ends, so a folder
+with .pcm files is a meeting that is recording now. Titles come from Wispr
+Flow's own database (flow.sqlite, table Meetings), opened read-only.
+
+This script only reads. It never writes into the Wispr Flow folder.
+"""
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+import urllib.parse
+from pathlib import Path
+
+APP_BUNDLES = [Path("/Applications/Wispr Flow.app"), Path("~/Applications/Wispr Flow.app").expanduser()]
+DATA = Path(os.environ.get("WISPR_FLOW_DATA", "~/Library/Application Support/Wispr Flow")).expanduser()
+MEETINGS = DATA / "meetings"
+DB = DATA / "flow.sqlite"
+
+EXIT_UNSUPPORTED = 3  # not macOS, or Wispr Flow is not installed
+EXIT_NO_MEETING = 4  # nothing recorded yet / meeting not found
+
+POLL_SECONDS = 0.5
+SCAN_SECONDS = 2.0
+
+
+def die(message, code):
+    print(f"wispr-live: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def check_environment():
+    if sys.platform != "darwin":
+        die(f"this only works on macOS, where Wispr Flow runs (this is {sys.platform}). Stop here.", EXIT_UNSUPPORTED)
+    if not any(p.is_dir() for p in APP_BUNDLES):
+        die("Wispr Flow is not installed (no 'Wispr Flow.app' in /Applications or ~/Applications). Stop here.",
+            EXIT_UNSUPPORTED)
+    if not DATA.is_dir():
+        die(f"Wispr Flow is installed but has no data folder yet ({DATA}). Open it and sign in first.",
+            EXIT_UNSUPPORTED)
+
+
+def birth(path):
+    st = path.stat()
+    return getattr(st, "st_birthtime", st.st_ctime)
+
+
+def is_recording(folder):
+    return any(folder.glob("*.pcm"))
+
+
+def recording_folders():
+    """Meeting folders that are recording now, newest meeting first."""
+    found = []
+    if not MEETINGS.is_dir():
+        return []
+    for folder in MEETINGS.iterdir():
+        try:
+            if (folder / "live.ndjson").is_file() and is_recording(folder):
+                found.append((birth(folder), folder))
+        except FileNotFoundError:  # the meeting ended while we looked
+            continue
+    return [folder for _, folder in sorted(found, reverse=True)]
+
+
+def latest_folder():
+    """The most recently written meeting, recording or not."""
+    best = None
+    for f in MEETINGS.glob("*/live.ndjson") if MEETINGS.is_dir() else []:
+        try:
+            mtime = f.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if best is None or mtime > best[0]:
+            best = (mtime, f.parent)
+    return best[1] if best else None
+
+
+def resolve_meeting(ref):
+    """A meeting id, id prefix, meeting folder, or live.ndjson path."""
+    path = Path(ref).expanduser()
+    if path.is_file():
+        return path.parent
+    if path.is_dir():
+        return path
+    matches = [d for d in MEETINGS.iterdir() if d.name.startswith(ref)] if MEETINGS.is_dir() else []
+    if len(matches) != 1:
+        found = "no meeting matches" if not matches else f"{len(matches)} meetings match"
+        die(f"{found} '{ref}'.", EXIT_NO_MEETING)
+    return matches[0]
+
+
+def title_of(folder):
+    try:
+        uri = "file:" + urllib.parse.quote(str(DB)) + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            row = con.execute("SELECT title FROM Meetings WHERE id = ?", (folder.name,)).fetchone()
+        finally:
+            con.close()
+        return row[0] if row and row[0] else "(untitled)"
+    except sqlite3.Error:
+        return "(title unavailable)"
+
+
+def seconds(stamp):
+    """'m:ss' or 'h:mm:ss' recording time -> seconds; None for anything else."""
+    try:
+        total = 0
+        for part in stamp.split(":"):
+            total = total * 60 + int(part)
+        return total
+    except (AttributeError, ValueError):
+        return None
+
+
+def render(rec):
+    if "text" in rec:
+        speaker = rec.get("speaker") or {}
+        source = speaker.get("source")
+        who = f"{'call' if source == 'system' else source or '?'} {speaker.get('id', '?')}"
+        if speaker.get("name"):
+            who += f" ({speaker['name']})"
+        return f"[{rec.get('timestamp', '?')}] {who}: {rec['text'].strip()}"
+    marker = rec.get("marker")
+    if marker and marker != "dictated":  # 'dictated' is the user's own Wispr dictation, not speech
+        return f"[{rec.get('timestamp', '?')}] -- recording {marker} --"
+    return None
+
+
+class Gate:
+    """Pass everything from the first utterance at or after --since onward."""
+
+    def __init__(self, since):
+        self.since = seconds(since) if since else None
+        if since and self.since is None:
+            die(f"--since wants a transcript timestamp like 21:43, not '{since}'.", 2)
+        self.open = self.since is None
+
+    def admit(self, rec):
+        if not self.open:
+            t = seconds(rec.get("timestamp")) if "text" in rec else None
+            self.open = t is not None and t >= self.since
+        return self.open
+
+
+class Reader:
+    """Reads complete lines appended to one live.ndjson."""
+
+    def __init__(self, folder, skip_existing=False):
+        self.folder = folder
+        self.file = folder / "live.ndjson"
+        self.pos = 0
+        self.partial = b""
+        if skip_existing:
+            data = self.file.read_bytes()
+            self.pos = data.rfind(b"\n") + 1
+
+    def records(self):
+        try:
+            size = self.file.stat().st_size
+        except FileNotFoundError:
+            return []
+        if size < self.pos:  # rewritten; start over
+            self.pos, self.partial = 0, b""
+        if size == self.pos:
+            return []
+        with open(self.file, "rb") as f:
+            f.seek(self.pos)
+            chunk = f.read(size - self.pos)
+        self.pos += len(chunk)
+        lines = (self.partial + chunk).split(b"\n")
+        self.partial = lines.pop()  # unfinished last line, if any
+        out = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                print(f"wispr-live: skipped an unreadable line in {self.file}", file=sys.stderr)
+        return out
+
+
+def emit(lines):
+    if lines:
+        sys.stdout.write("".join(line + "\n" for line in lines))
+        sys.stdout.flush()
+
+
+def header(folder):
+    state = "recording" if is_recording(folder) else "ended"
+    return f"=== {title_of(folder)} | {state} | {folder.name} ==="
+
+
+def pump(reader, gate):
+    emit([text for rec in reader.records() if gate.admit(rec) and (text := render(rec))])
+
+
+def pick_for_reading(args):
+    if args.meeting:
+        return resolve_meeting(args.meeting)
+    live = recording_folders()
+    folder = live[0] if live else latest_folder()
+    if folder is None:
+        die("Wispr Flow has no meetings yet.", EXIT_NO_MEETING)
+    return folder
+
+
+def cmd_status(args):
+    folder = pick_for_reading(args)
+    f = folder / "live.ndjson"
+    records = Reader(folder).records()
+    said = [r for r in records if "text" in r]
+    age = time.time() - f.stat().st_mtime
+    print(f"state:   {'recording' if is_recording(folder) else 'ended (no meeting is recording now)'}")
+    print(f"title:   {title_of(folder)}")
+    print(f"meeting: {folder.name}")
+    print(f"file:    {f}")
+    print(f"lines:   {len(said)}, last at {said[-1].get('timestamp') if said else '-'}, file written {age:.0f}s ago")
+    refined = folder / "refined.ndjson"
+    if refined.is_file():
+        print(f"refined: {refined}")
+
+
+def cmd_once(args):
+    gate = Gate(args.since)
+    folder = pick_for_reading(args)
+    emit([header(folder)])
+    pump(Reader(folder), gate)
+
+
+def cmd_follow(args):
+    pinned = resolve_meeting(args.meeting) if args.meeting else None
+    gate = Gate(args.since)
+    reader = None
+    ended_said = False
+    waiting_said = False
+    next_scan = 0.0
+
+    while True:
+        now = time.monotonic()
+        if now >= next_scan:
+            next_scan = now + SCAN_SECONDS
+            if pinned:
+                target = pinned
+            else:
+                live = recording_folders()
+                target = live[0] if live else None
+                # Only move to a meeting that started after the one we follow,
+                # so leftover audio from an old crashed meeting can't pull us back.
+                if target and reader and birth(target) <= birth(reader.folder):
+                    target = reader.folder
+            if target and (reader is None or target != reader.folder):
+                if reader:
+                    pump(reader, gate)
+                    gate = Gate(None)  # --since applies to the first meeting only
+                reader = Reader(target, skip_existing=args.new and reader is None)
+                ended_said = False
+                emit([header(target)])
+            elif reader is None and not waiting_said:
+                print("wispr-live: no meeting is recording; waiting for one to start", file=sys.stderr)
+                waiting_said = True
+            if reader and not ended_said and not is_recording(reader.folder):
+                pump(reader, gate)
+                emit([f"=== recording ended: {title_of(reader.folder)} ==="])
+                ended_said = True
+                if pinned:
+                    return
+        if reader:
+            pump(reader, gate)
+        time.sleep(POLL_SECONDS)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Read the live transcript of the meeting Wispr Flow is recording on this Mac.",
+        epilog="Lines look like '[12:34] call 1003 (Name): text'. 'mic N' is this Mac's microphone, "
+               "'call N' is audio from the call. Names are Wispr Flow's live guesses and are often wrong.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--status", action="store_true", help="show which meeting would be read, and stop")
+    mode.add_argument("--once", action="store_true", help="print the transcript so far, and stop")
+    mode.add_argument("--path", action="store_true", help="print the path of the meeting's live.ndjson, and stop")
+    parser.add_argument("--since", metavar="M:SS", help="start at the first line at or after this transcript timestamp")
+    parser.add_argument("--new", action="store_true", help="follow mode: skip lines written before now")
+    parser.add_argument("--meeting", metavar="ID", help="read this meeting (id, id prefix, or folder) instead of the active one")
+    args = parser.parse_args()
+
+    check_environment()
+    try:
+        if args.status:
+            cmd_status(args)
+        elif args.once:
+            cmd_once(args)
+        elif args.path:
+            print(pick_for_reading(args) / "live.ndjson")
+        else:
+            cmd_follow(args)
+    except (BrokenPipeError, KeyboardInterrupt):
+        try:
+            sys.stdout.close()
+        except BrokenPipeError:
+            pass
+        os._exit(0)
+
+
+if __name__ == "__main__":
+    main()
