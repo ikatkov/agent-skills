@@ -45,6 +45,8 @@ no meeting to read.
      and quote the error. Do not look for transcripts another way.
    - `state: ended`: no meeting is recording now. Tell the user, and ask whether to read the
      last meeting (shown by `--status`) or wait for a recording to start.
+   - `lines: 0, nothing said yet`: the meeting is recording but nobody has finished a sentence.
+     That is normal at the start. Go straight to step 3 (stream without `--since`).
    - Check the title is the meeting the user means.
 2. Catch up: `"$W" --once`. For a long meeting, read `"$W" --once | tail -n 200` first and the
    rest only if needed.

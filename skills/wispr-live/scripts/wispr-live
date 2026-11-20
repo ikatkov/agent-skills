@@ -8,7 +8,9 @@ after they were spoken; the file only ever grows.
 
 While a meeting records, its folder also holds raw audio (mic.pcm,
 system.pcm). Wispr Flow removes those files when the meeting ends, so a folder
-with .pcm files is a meeting that is recording now. Titles come from Wispr
+with .pcm files is a meeting that is recording now. live.ndjson itself only
+appears with the first finished line: a meeting where nobody has spoken yet
+has audio files and no transcript file. Titles come from Wispr
 Flow's own database (flow.sqlite, table Meetings), opened read-only.
 
 This script only reads. It never writes into the Wispr Flow folder.
@@ -67,7 +69,8 @@ def recording_folders():
         return []
     for folder in MEETINGS.iterdir():
         try:
-            if (folder / "live.ndjson").is_file() and is_recording(folder):
+            # No live.ndjson check: it does not exist until someone has spoken.
+            if folder.is_dir() and is_recording(folder):
                 found.append((birth(folder), folder))
         except FileNotFoundError:  # the meeting ended while we looked
             continue
@@ -163,7 +166,7 @@ class Reader:
         self.file = folder / "live.ndjson"
         self.pos = 0
         self.partial = b""
-        if skip_existing:
+        if skip_existing and self.file.is_file():
             data = self.file.read_bytes()
             self.pos = data.rfind(b"\n") + 1
 
@@ -223,12 +226,15 @@ def cmd_status(args):
     f = folder / "live.ndjson"
     records = Reader(folder).records()
     said = [r for r in records if "text" in r]
-    age = time.time() - f.stat().st_mtime
     print(f"state:   {'recording' if is_recording(folder) else 'ended (no meeting is recording now)'}")
     print(f"title:   {title_of(folder)}")
     print(f"meeting: {folder.name}")
     print(f"file:    {f}")
-    print(f"lines:   {len(said)}, last at {said[-1].get('timestamp') if said else '-'}, file written {age:.0f}s ago")
+    if f.is_file():
+        age = time.time() - f.stat().st_mtime
+        print(f"lines:   {len(said)}, last at {said[-1].get('timestamp') if said else '-'}, file written {age:.0f}s ago")
+    else:
+        print("lines:   0, nothing said yet (Wispr Flow creates the file with the first finished line)")
     refined = folder / "refined.ndjson"
     if refined.is_file():
         print(f"refined: {refined}")
